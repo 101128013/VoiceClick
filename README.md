@@ -39,7 +39,7 @@ Type by speaking! Voice Click automatically detects when you click into a text f
 
 ```powershell
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/VoiceClick.git
+git clone https://github.com/101128013/VoiceClick.git
 cd VoiceClick
 
 # Install dependencies
