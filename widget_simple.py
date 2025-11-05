@@ -13,36 +13,34 @@ from PyQt6.QtGui import QFont, QPainter, QColor, QBrush
 
 
 class VerticalProgressBar(QWidget):
-    """Vertical progress bar widget"""
+    """Vertical progress bar - 8px × 30px rectangle showing progress from bottom"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.progress = 0  # 0-100
-        self.setStyleSheet("background-color: transparent; border: 1px solid #555;")
+        self.progress = 0  # 0-100 percentage
+        self.setStyleSheet("background-color: #3c3c3c; border: none;")  # Dark gray background
         
     def set_progress(self, value):
-        """Set progress value (0-100)"""
+        """Set progress percentage (0-100)"""
         self.progress = max(0, min(100, value))
-        self.update()
+        self.update()  # Trigger repaint
     
     def paintEvent(self, event):
-        """Paint the vertical progress bar"""
+        """Draw the progress bar - green fill from bottom"""
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        # Draw background
-        bg_color = QColor(60, 60, 60)
-        painter.fillRect(self.rect(), bg_color)
+        # Fill entire background with dark gray
+        painter.fillRect(0, 0, 8, 30, QColor(60, 60, 60))
         
-        # Draw progress from bottom to top
-        if self.progress > 0:
-            height = self.height()
-            fill_height = int((self.progress / 100) * height)
-            
-            # Green progress fill
-            progress_color = QColor(0, 255, 0)
-            fill_rect = QRect(0, height - fill_height, self.width(), fill_height)
-            painter.fillRect(fill_rect, progress_color)
+        # Calculate green fill height (from bottom upward)
+        fill_height = int((self.progress / 100.0) * 30)
+        
+        if fill_height > 0:
+            # Draw green progress from bottom
+            fill_y = 30 - fill_height  # Start position (from top)
+            painter.fillRect(0, fill_y, 8, fill_height, QColor(0, 255, 0))
+
+
 
 
 class SimpleProgressWidget(QWidget):
@@ -55,7 +53,48 @@ class SimpleProgressWidget(QWidget):
         self.task_name = "Design main window"
         self.dragging = False
         self.drag_position = None
+        self.roadmap_file = Path(__file__).parent / "PROJECT_ROADMAP.md"
+        self.load_project_status()  # Load actual progress from roadmap
         self.setup_ui()
+        
+        # Setup auto-refresh timer to check for project updates
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.timeout.connect(self.load_project_status)
+        self.refresh_timer.start(10000)  # Check every 10 seconds
+    
+    def load_project_status(self):
+        """Load current project status from PROJECT_ROADMAP.md"""
+        try:
+            if not self.roadmap_file.exists():
+                return
+            
+            with open(self.roadmap_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Extract overall progress
+            import re
+            progress_match = re.search(r'\*\*Overall Progress:\*\* (\d+)/(\d+)', content)
+            if progress_match:
+                completed = int(progress_match.group(1))
+                total = int(progress_match.group(2))
+                self.total_tasks = total
+                # Don't update current_task here, it will be set from IN PROGRESS task
+            
+            # Find current task (marked as IN PROGRESS or 🔄)
+            current_task_match = re.search(r'#### Task (\d+): ([^\n🔄]+)(?:🔄)?[^\n]*IN PROGRESS', content)
+            if current_task_match:
+                task_num = int(current_task_match.group(1))
+                task_title = current_task_match.group(2).strip()
+                self.current_task = task_num
+                self.task_name = task_title
+                print(f"Loaded: Task {self.current_task}/{self.total_tasks} - {self.task_name}")
+            
+            # Update display if UI is ready
+            if hasattr(self, 'task_label'):
+                self.update_display()
+                
+        except Exception as e:
+            print(f"Error loading project status: {e}")
         
     def setup_ui(self):
         """Setup the UI"""
@@ -63,6 +102,9 @@ class SimpleProgressWidget(QWidget):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
                           Qt.WindowType.WindowStaysOnTopHint | 
                           Qt.WindowType.Tool)
+        
+        # Set focus policy to accept keyboard input
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         
         # Dark background with green border
         self.setStyleSheet("""
@@ -80,14 +122,13 @@ class SimpleProgressWidget(QWidget):
         
         # Main horizontal layout
         main_layout = QHBoxLayout()
-        main_layout.setContentsMargins(8, 4, 8, 4)
+        # We will give right=8 here and not add extra right margin elsewhere
+        main_layout.setContentsMargins(8, 8, 8, 8)  # left, top, right, bottom
         main_layout.setSpacing(8)
         
         # Left side: Text labels in vertical layout
         text_layout = QVBoxLayout()
-        text_layout.setSpacing(2)
-        
-        # Task info label
+        text_layout.setSpacing(2)        # Task info label
         self.task_label = QLabel(f"Task {self.current_task}/{self.total_tasks}: {self.task_name}")
         font = QFont("Segoe UI", 10)
         font.setBold(True)
@@ -104,12 +145,25 @@ class SimpleProgressWidget(QWidget):
         
         main_layout.addLayout(text_layout, 1)
         
-        # Right side: Vertical progress bar (same width as margin)
+        # Right side: progress bar with exact margins handled by main layout
+        # Rectangle: 8px × 30px; With main_layout top/bottom/right margins = 8px each
+        # Math: 8 (top) + 30 (bar) + 8 (bottom) = 46 total height
+        right_col = QVBoxLayout()
+        right_col.setContentsMargins(0, 0, 0, 0)
+        right_col.setSpacing(0)
         self.progress_bar = VerticalProgressBar()
-        self.progress_bar.setFixedSize(8, 42)  # 8px wide to match margin
+        self.progress_bar.setFixedSize(8, 30)
         progress_pct = int((self.current_task / self.total_tasks) * 100)
         self.progress_bar.set_progress(progress_pct)
-        main_layout.addWidget(self.progress_bar)
+        # Add a stretch above and below to center vertically within the 8px margins of main layout
+        right_col.addStretch(1)
+        right_col.addWidget(self.progress_bar, 0, alignment=Qt.AlignmentFlag.AlignRight)
+        right_col.addStretch(1)
+        # Wrap right column into a container to take minimal width
+        right_wrap = QWidget()
+        right_wrap.setLayout(right_col)
+        right_wrap.setFixedWidth(8)  # only the bar width; right margin is provided by main_layout
+        main_layout.addWidget(right_wrap, 0)
         
         self.setLayout(main_layout)
         
@@ -138,8 +192,9 @@ class SimpleProgressWidget(QWidget):
         self.progress_bar.set_progress(progress_pct)
     
     def mousePressEvent(self, event):
-        """Start dragging"""
+        """Start dragging and give focus for keyboard events"""
         if event.button() == Qt.MouseButton.LeftButton:
+            self.setFocus()  # Ensure widget has focus for keyboard input
             self.dragging = True
             self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()

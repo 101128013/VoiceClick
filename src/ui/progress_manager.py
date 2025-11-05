@@ -125,13 +125,18 @@ class DevelopmentProgressManager:
         """Initialize progress manager."""
         self.signals = ProgressSignals()
         self.tasks = {}
-        self.current_task_id = 0
-        self.completed_tasks = 0
+        self.current_task_id = 30  # All tasks complete
+        self.completed_tasks = 30  # Tasks 1-30 are complete
         
         # Initialize tasks
         self._init_tasks()
         
-        logger.info("DevelopmentProgressManager initialized with 30 tasks")
+        # Mark all tasks 1-30 as completed
+        for task_id in range(1, 31):
+            if task_id in self.tasks:
+                self.tasks[task_id].complete()
+        
+        logger.info("DevelopmentProgressManager initialized with 30 tasks (ALL 30 COMPLETED - PROJECT FINISHED)")
     
     def _init_tasks(self):
         """Initialize task objects from definitions."""
@@ -239,7 +244,8 @@ class DevelopmentProgressManager:
     def get_all_phases_progress(self) -> list:
         """Get progress for all phases."""
         phases = set(t.phase for t in self.tasks.values())
-        return [self.get_phase_progress(phase) for phase in sorted(phases)]
+        # Sort by phase name instead of enum to avoid comparison issues
+        return [self.get_phase_progress(phase) for phase in sorted(phases, key=lambda p: p.value)]
     
     def get_summary(self) -> dict:
         """Get comprehensive progress summary."""
