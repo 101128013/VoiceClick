@@ -12,6 +12,49 @@ VoiceClick is an advanced Windows 11 application that enables users to transcrib
 - **Data Persistence**: Transcription history with JSON storage
 - **Modern UI**: Native Windows 11 PyQt6 interface with system tray integration
 
+## Quick Start
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the progress monitor (optional)
+python monitor.py
+
+# Start development
+python app.py
+```
+
+## Project Status
+
+- **Phase 1**: Setup & Architecture ✓ Complete (4/4)
+- **Phase 2**: UI Development ⏳ In Progress (Task 5: Main Window)
+- **Phase 3**: Testing & Packaging ⏹️ Pending
+- **Phase 4**: Documentation & Release ⏹️ Pending
+
+**Overall**: 4/30 tasks complete (13%)
+
+See `PROJECT_ROADMAP.md` for complete roadmap and `docs/` for detailed documentation.
+
+## Project Structure
+
+```
+VoiceClick/
+├── app.py                   # Main application entry point
+├── monitor.py              # Development progress widget
+├── requirements.txt        # Python dependencies
+├── PROJECT_ROADMAP.md      # 30-task development roadmap
+├── src/
+│   ├── core/              # Core modules (engine, detection, history)
+│   ├── ui/                # UI components (main window, tabs, widgets)
+│   ├── config/            # Configuration system
+│   └── resources/         # Icons and assets
+├── tests/                 # Unit tests
+├── docs/                  # Documentation
+├── examples/              # Example code
+└── .github/               # CI/CD workflows
+```
+
 ## System Requirements
 
 - Windows 11
@@ -19,40 +62,18 @@ VoiceClick is an advanced Windows 11 application that enables users to transcrib
 - 4GB RAM minimum (8GB recommended)
 - NVIDIA GPU with CUDA support (optional, but recommended)
 
-## Installation
-
-### From Installer (Recommended)
-
-1. Download `Voice-Click-Setup.exe` from the latest release
-2. Run the installer
-3. Follow the setup wizard
-4. VoiceClick will appear in your Start Menu and Desktop
-
-### From Source
+## Installation from Source
 
 1. Clone the repository
 2. Install dependencies: `pip install -r requirements.txt`
-3. Run: `python src/main.py`
+3. Run: `python app.py`
 
-## Usage
+## Development Guide
 
-1. Launch VoiceClick from Start Menu or Desktop
-2. Configure settings (model, device, hotkeys)
-3. Use middle-click to toggle recording in any text field
-4. Speak clearly and naturally
-5. Transcribed text will be automatically inserted
-
-## Configuration
-
-Settings are saved in `~/.voice_click/config.json` and can be modified through the Settings tab in the application.
-
-## Troubleshooting
-
-See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common issues and solutions.
-
-## Development
-
-See [DEVELOPMENT.md](DEVELOPMENT.md) for developer setup and contribution guidelines.
+1. Read `PROJECT_ROADMAP.md` - understand the 30-task plan
+2. Review `docs/` - architecture and setup guides
+3. Check `src/core/` - core modules
+4. Start Phase 2 - UI development tasks
 
 ## License
 
@@ -60,4 +81,4 @@ MIT License - See LICENSE file for details
 
 ## Support
 
-For issues, feature requests, or questions, please open an issue on GitHub.
+For issues and questions, see documentation in the `docs/` folder.
