@@ -1,0 +1,27 @@
+# Voice Click - Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Audio Processing
+sounddevice>=0.4.6          # Audio input/output
+numpy>=1.24.0               # Numerical computing
+
+# Speech Recognition
+faster-whisper>=0.10.0      # Fast speech-to-text using Whisper
+
+# Input/Output Control
+pynput>=1.7.6               # Mouse and keyboard input
+keyboard>=0.13.5            # Keyboard monitoring
+pyperclip>=1.8.2            # Clipboard operations
+
+# Windows API Integration
+pywin32>=305                # Windows API access
+
+# Tkinter (included with Python, but listed for completeness)
+# tkinter is built-in to Python standard library
+
+# Testing & Validation
+pytest>=7.0.0               # Testing framework
+pytest-cov>=4.0.0           # Coverage reporting
+
+# Utilities
+python-dotenv>=1.0.0        # Environment configuration
