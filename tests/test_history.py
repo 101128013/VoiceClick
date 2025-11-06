@@ -50,8 +50,8 @@ class TestTranscriptionHistory:
             history = TranscriptionHistory(history_file=temp_path)
             
             # Add records
-            history.add_record("First transcription", 2.5, "large-v3")
-            history.add_record("Second transcription", 3.0, "large-v3")
+            history.add_record("First transcription", 2.5, "large-v3", "en")
+            history.add_record("Second transcription", 3.0, "large-v3", "en")
             
             assert len(history.records) == 2
             assert history.records[0].text == "Second transcription"  # Most recent first
@@ -70,9 +70,9 @@ class TestTranscriptionHistory:
             history = TranscriptionHistory(history_file=temp_path)
             
             # Add test records
-            history.add_record("Hello world", 1.0, "tiny")
-            history.add_record("Python programming", 2.0, "tiny")
-            history.add_record("Hello Python", 3.0, "tiny")
+            history.add_record("Hello world", 1.0, "tiny", "en")
+            history.add_record("Python programming", 2.0, "tiny", "en")
+            history.add_record("Hello Python", 3.0, "tiny", "en")
             
             # Search for "Hello"
             results = history.search("Hello")
@@ -98,8 +98,8 @@ class TestTranscriptionHistory:
         try:
             # Create and save history
             history1 = TranscriptionHistory(history_file=temp_path)
-            history1.add_record("Test entry 1", 1.5, "tiny")
-            history1.add_record("Test entry 2", 2.5, "tiny")
+            history1.add_record("Test entry 1", 1.5, "tiny", "en")
+            history1.add_record("Test entry 2", 2.5, "tiny", "en")
             history1.save()
             
             # Load in new instance
@@ -121,9 +121,9 @@ class TestTranscriptionHistory:
             history = TranscriptionHistory(history_file=temp_path)
             
             # Add records
-            rec1 = history.add_record("Entry 1", 1.0, "tiny")
-            rec2 = history.add_record("Entry 2", 2.0, "tiny")
-            rec3 = history.add_record("Entry 3", 3.0, "tiny")
+            rec1 = history.add_record("Entry 1", 1.0, "tiny", "en")
+            rec2 = history.add_record("Entry 2", 2.0, "tiny", "en")
+            rec3 = history.add_record("Entry 3", 3.0, "tiny", "en")
             
             assert len(history.records) == 3
             
@@ -147,8 +147,8 @@ class TestTranscriptionHistory:
         
         try:
             history = TranscriptionHistory(history_file=json_path)
-            history.add_record("Test 1", 1.0, "tiny")
-            history.add_record("Test 2", 2.0, "tiny")
+            history.add_record("Test 1", 1.0, "tiny", "en")
+            history.add_record("Test 2", 2.0, "tiny", "en")
             
             # Export to CSV
             result = history.export_to_csv(csv_path)
@@ -164,7 +164,110 @@ class TestTranscriptionHistory:
                 json_path.unlink()
             if csv_path.exists():
                 csv_path.unlink()
-
-
-if __name__ == '__main__':
-    pytest.main([__file__, '-v'])
+    
+    def test_get_stats(self):
+        """Test get_stats method"""
+        with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as f:
+            temp_path = Path(f.name)
+        
+        try:
+            history = TranscriptionHistory(history_file=temp_path)
+            
+            # Empty history
+            stats = history.get_stats()
+            assert stats['total_records'] == 0
+            assert stats['total_duration'] == 0
+            assert stats['average_duration'] == 0
+            
+            # Add records
+            history.add_record("Test 1", 2.0, "tiny", "en")
+            history.add_record("Test 2", 4.0, "tiny", "en")
+            
+            stats = history.get_stats()
+            assert stats['total_records'] == 2
+            assert stats['total_duration'] == 6.0
+            assert stats['average_duration'] == 3.0
+            
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+    
+    def test_trim_history(self):
+        """Test _trim_history with max_size"""
+        with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as f:
+            temp_path = Path(f.name)
+        
+        try:
+            history = TranscriptionHistory(history_file=temp_path, max_size=3)
+            
+            # Add more records than max_size
+            history.add_record("Record 1", 1.0, "tiny", "en")
+            history.add_record("Record 2", 2.0, "tiny", "en")
+            history.add_record("Record 3", 3.0, "tiny", "en")
+            history.add_record("Record 4", 4.0, "tiny", "en")
+            history.add_record("Record 5", 5.0, "tiny", "en")
+            
+            # Should be trimmed to max_size
+            assert len(history.records) == 3
+            assert history.records[0].text == "Record 5"  # Most recent
+            
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+    
+    def test_load_invalid_json(self):
+        """Test loading invalid JSON"""
+        with tempfile.NamedTemporaryFile(suffix='.json', delete=False, mode='w') as f:
+            temp_path = Path(f.name)
+            f.write("invalid json content {")
+        
+        try:
+            history = TranscriptionHistory(history_file=temp_path)
+            # Should start with empty history
+            assert len(history.records) == 0
+            
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+    
+    def test_get_by_id(self):
+        """Test get_by_id method"""
+        with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as f:
+            temp_path = Path(f.name)
+        
+        try:
+            history = TranscriptionHistory(history_file=temp_path)
+            
+            rec1 = history.add_record("Record 1", 1.0, "tiny", "en")
+            rec2 = history.add_record("Record 2", 2.0, "tiny", "en")
+            
+            found = history.get_by_id(rec1.id)
+            assert found is not None
+            assert found.text == "Record 1"
+            
+            not_found = history.get_by_id("nonexistent")
+            assert not_found is None
+            
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+    
+    def test_clear_all(self):
+        """Test clear_all method"""
+        with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as f:
+            temp_path = Path(f.name)
+        
+        try:
+            history = TranscriptionHistory(history_file=temp_path)
+            history.add_record("Record 1", 1.0, "tiny", "en")
+            history.add_record("Record 2", 2.0, "tiny", "en")
+            
+            assert len(history.records) == 2
+            
+            history.clear_all()
+            
+            assert len(history.records) == 0
+            
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()

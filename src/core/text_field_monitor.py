@@ -12,6 +12,7 @@ from dataclasses import dataclass
 try:
     import win32gui
     import win32con
+    import win32process
     WINDOWS_AVAILABLE = True
 except ImportError:
     WINDOWS_AVAILABLE = False
@@ -78,7 +79,7 @@ class TextFieldMonitor:
             class_name = win32gui.GetClassName(hwnd)
             
             # Get process name
-            _, pid = win32gui.GetWindowThreadProcessId(hwnd)
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
             try:
                 import psutil
                 process = psutil.Process(pid)

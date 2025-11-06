@@ -9,14 +9,14 @@ import logging
 import threading
 import time
 from typing import Optional, Callable
-from queue import Queue
 
 from src.core.text_field_monitor import TextFieldMonitor, TextFieldInfo
+from src.core.base_monitor import BaseMonitor
 
 logger = logging.getLogger(__name__)
 
 
-class FocusMonitor:
+class FocusMonitor(BaseMonitor):
     """
     Monitors focus changes and detects when text fields are focused.
     
@@ -24,27 +24,24 @@ class FocusMonitor:
     text field focus events occur.
     """
     
-    def __init__(self, text_field_monitor: Optional[TextFieldMonitor] = None):
+    def __init__(self, text_field_monitor: Optional[TextFieldMonitor] = None, cooldown_period: float = 2.0, debounce_delay: float = 0.1):
         """
         Initializes the FocusMonitor.
         
         Args:
             text_field_monitor: Optional TextFieldMonitor instance. If None, creates one.
+            cooldown_period: Seconds between activations (default: 2.0)
+            debounce_delay: Minimum delay between focus checks (default: 0.1)
         """
+        super().__init__(cooldown_period=cooldown_period, debounce_delay=debounce_delay)
         self.text_field_monitor = text_field_monitor or TextFieldMonitor()
         self.monitoring = False
         self.monitor_thread: Optional[threading.Thread] = None
-        self.callbacks: list[Callable[[TextFieldInfo], None]] = []
         
         # State tracking
         self.last_focused_field: Optional[TextFieldInfo] = None
         self.last_focus_time: float = 0.0
-        self.debounce_delay: float = 0.1  # 100ms debounce
-        
-        # Cooldown to prevent rapid re-activation
-        self.cooldown_period: float = 2.0  # 2 seconds
-        self.last_activation_time: float = 0.0
-        
+    
     def register_callback(self, callback: Callable[[TextFieldInfo], None]):
         """
         Registers a callback to be called when a text field gains focus.
@@ -52,15 +49,11 @@ class FocusMonitor:
         Args:
             callback: Function that takes a TextFieldInfo parameter.
         """
-        if callback not in self.callbacks:
-            self.callbacks.append(callback)
-            logger.info(f"Registered focus callback: {callback.__name__}")
+        super().register_callback(callback, "focus callback")
     
     def unregister_callback(self, callback: Callable[[TextFieldInfo], None]):
         """Unregisters a callback."""
-        if callback in self.callbacks:
-            self.callbacks.remove(callback)
-            logger.info(f"Unregistered focus callback: {callback.__name__}")
+        super().unregister_callback(callback, "focus callback")
     
     def start_monitoring(self):
         """Starts monitoring focus changes in a background thread."""
@@ -80,8 +73,18 @@ class FocusMonitor:
         
         self.monitoring = False
         if self.monitor_thread:
-            self.monitor_thread.join(timeout=2.0)
+            self.monitor_thread.join(timeout=5.0)  # Increased timeout
+            if self.monitor_thread.is_alive():
+                logger.warning("Focus monitor thread did not stop within timeout")
         logger.info("Focus monitoring stopped.")
+    
+    def cleanup(self):
+        """
+        Ensures all resources are properly cleaned up.
+        Should be called when the monitor is no longer needed.
+        """
+        self.stop_monitoring()
+        super().cleanup()
     
     def _monitor_loop(self):
         """Main monitoring loop running in background thread."""
@@ -101,9 +104,9 @@ class FocusMonitor:
                             self._is_different_field(current_info, self.last_focused_field)):
                             
                             # Check cooldown period
-                            if (current_time - self.last_activation_time) >= self.cooldown_period:
-                                self._notify_callbacks(current_info)
-                                self.last_activation_time = current_time
+                            if self._check_cooldown(current_time):
+                                self._notify_callbacks(current_info, "focus callback")
+                                self._update_activation_time(current_time)
                             
                             self.last_focused_field = current_info
                             self.last_focus_time = current_time
@@ -132,20 +135,4 @@ class FocusMonitor:
         return (info1.window_title != info2.window_title or
                 info1.control_type != info2.control_type)
     
-    def _notify_callbacks(self, field_info: TextFieldInfo):
-        """Notifies all registered callbacks of a focus event."""
-        for callback in self.callbacks:
-            try:
-                callback(field_info)
-            except Exception as e:
-                logger.error(f"Error in focus callback {callback.__name__}: {e}", exc_info=True)
-    
-    def set_cooldown_period(self, seconds: float):
-        """Sets the cooldown period between activations."""
-        self.cooldown_period = max(0.0, seconds)
-        logger.info(f"Cooldown period set to {self.cooldown_period}s")
-    
-    def reset_cooldown(self):
-        """Resets the cooldown timer (allows immediate activation)."""
-        self.last_activation_time = 0.0
 

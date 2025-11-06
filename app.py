@@ -9,12 +9,22 @@ It sets up logging, initializes the Qt application, and displays the main window
 import sys
 import logging
 from pathlib import Path
-from PyQt6.QtWidgets import QApplication
-from src.ui.main_window import MainWindow
 
 # Add project root to the Python path to ensure correct module resolution.
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+# Import torch-related modules BEFORE PyQt6 to avoid DLL loading conflicts
+# This ensures torch DLLs are loaded before Qt's DLL loader interferes
+try:
+    import torch
+    from faster_whisper import WhisperModel
+except ImportError:
+    pass  # Will be imported later when needed
+
+# Now import PyQt6 after torch is loaded
+from PyQt6.QtWidgets import QApplication
+from src.ui.main_window import MainWindow
 
 def setup_logging():
     """

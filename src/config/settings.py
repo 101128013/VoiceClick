@@ -61,6 +61,7 @@ class Settings:
     
     # Advanced Settings
     debug_mode: bool = False
+    check_for_updates: bool = True  # Check for updates on startup
 
     def to_dict(self) -> dict:
         """Converts the settings object to a dictionary."""

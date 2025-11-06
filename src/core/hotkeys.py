@@ -18,6 +18,8 @@ except ImportError:
     Key = None
     Listener = None
 
+from src.core.utils import normalize_key
+
 logger = logging.getLogger(__name__)
 
 
@@ -50,6 +52,10 @@ class HotkeyManager:
         """
         if keyboard is None:
             logger.error("Cannot register hotkeys: pynput not available")
+            return False
+        
+        if not combination or not callback:
+            logger.error("Invalid hotkey combination or callback")
             return False
             
         try:
@@ -103,11 +109,7 @@ class HotkeyManager:
         try:
             with self.lock:
                 # Normalize the key
-                if hasattr(key, 'char') and key.char:
-                    normalized_key = key.char
-                else:
-                    normalized_key = key
-                    
+                normalized_key = normalize_key(key)
                 self.pressed_keys.add(normalized_key)
                 
                 # Check each registered hotkey
@@ -127,11 +129,7 @@ class HotkeyManager:
         try:
             with self.lock:
                 # Normalize the key
-                if hasattr(key, 'char') and key.char:
-                    normalized_key = key.char
-                else:
-                    normalized_key = key
-                    
+                normalized_key = normalize_key(key)
                 self.pressed_keys.discard(normalized_key)
         except Exception as e:
             logger.error(f"Error in key release handler: {e}", exc_info=True)
@@ -161,13 +159,17 @@ class HotkeyManager:
     
     def stop(self):
         """Stops listening for hotkey presses."""
+        if not self.running:
+            return
+        
         if self.listener:
             try:
                 self.listener.stop()
-                self.listener = None
-                self.running = False
-                logger.info("Hotkey listener stopped")
             except Exception as e:
                 logger.error(f"Error stopping hotkey listener: {e}", exc_info=True)
+            finally:
+                self.listener = None
+        self.running = False
+        logger.info("Hotkey listener stopped")
 
 

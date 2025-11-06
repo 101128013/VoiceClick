@@ -15,10 +15,80 @@ from typing import Optional, Callable
 import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
+from PyQt6.QtCore import QThread, pyqtSignal
 
 from src.config.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+
+class TranscriptionWorker(QThread):
+    """
+    Worker thread for asynchronous audio transcription.
+    
+    This class handles transcription in a separate thread to avoid blocking
+    the main UI thread during long transcription operations.
+    """
+    
+    # Signals for thread-safe communication with UI
+    transcription_complete = pyqtSignal(str)  # Emitted with transcription result
+    transcription_failed = pyqtSignal(str)  # Emitted with error message
+    transcription_progress = pyqtSignal(str)  # Emitted with progress updates
+    
+    def __init__(self, model: WhisperModel, audio: np.ndarray, config: Settings, model_lock: threading.Lock):
+        """
+        Initializes the transcription worker.
+        
+        Args:
+            model: The WhisperModel instance to use for transcription
+            audio: The audio array to transcribe
+            config: Settings object containing transcription parameters
+            model_lock: Thread lock for model access
+        """
+        super().__init__()
+        self.model = model
+        self.audio = audio
+        self.config = config
+        self.model_lock = model_lock
+        
+    def run(self):
+        """Executes the transcription in the worker thread."""
+        try:
+            self.transcription_progress.emit("Transcribing audio...")
+            
+            with self.model_lock:
+                # First pass: enable VAD to remove non-speech and improve quality
+                segments, info = self.model.transcribe(
+                    self.audio,
+                    language=self.config.language if self.config.language != "auto" else None,
+                    beam_size=5,
+                    vad_filter=True,
+                )
+                text = " ".join(segment.text for segment in segments).strip()
+
+            if text:
+                self.transcription_complete.emit(text)
+            else:
+                # Fallback pass: retry with different decoding params
+                with self.model_lock:
+                    segments, info = self.model.transcribe(
+                        self.audio,
+                        language=self.config.language if self.config.language != "auto" else None,
+                        beam_size=1,
+                        vad_filter=False,
+                        temperature=0.7,
+                        condition_on_previous_text=False,
+                    )
+                    text_retry = " ".join(segment.text for segment in segments).strip()
+
+                if text_retry:
+                    self.transcription_complete.emit(text_retry)
+                else:
+                    self.transcription_failed.emit("Transcription returned empty result")
+                
+        except Exception as e:
+            logger.exception(f"Transcription failed in worker thread: {e}")
+            self.transcription_failed.emit(str(e))
 
 class VoiceClickEngine:
     """
@@ -43,7 +113,7 @@ class VoiceClickEngine:
 
         # Audio recording state
         self.stream: Optional[sd.InputStream] = None
-        self.audio_data: list[np.ndarray] = []
+        self.audio_data: queue.Queue = queue.Queue()
         self.recording_start_time: Optional[float] = None
 
         # Status tracking
@@ -54,10 +124,14 @@ class VoiceClickEngine:
         self.recording_thread: Optional[threading.Thread] = None
         self.stop_event = threading.Event()
         self.model_lock = threading.Lock()
+        self.transcription_worker: Optional[TranscriptionWorker] = None
 
         # Callbacks for UI updates
         self.on_volume_change: Optional[Callable[[int], None]] = None
         self.on_status_change: Optional[Callable[[str], None]] = None
+        self.on_transcription_complete: Optional[Callable[[str], None]] = None
+        self.on_transcription_failed: Optional[Callable[[str], None]] = None
+        self.on_transcription_progress: Optional[Callable[[str], None]] = None
 
         logger.info(f"VoiceClickEngine initialized with model '{config.whisper_model}'")
 
@@ -117,7 +191,12 @@ class VoiceClickEngine:
 
         try:
             self.is_recording = True
-            self.audio_data = []
+            # Clear the queue for new recording
+            while not self.audio_data.empty():
+                try:
+                    self.audio_data.get_nowait()
+                except queue.Empty:
+                    break
             self.recording_start_time = time.time()
             self.silence_start_time = None
             self.stop_event.clear()
@@ -136,47 +215,97 @@ class VoiceClickEngine:
                 self.on_status_change(f"Error: Could not start recording. {e}")
             return False
 
-    def stop_recording(self) -> Optional[str]:
+    def stop_recording(self) -> bool:
         """
-        Stops the recording, transcribes the captured audio, and returns the text.
+        Stops the recording and starts asynchronous transcription.
+        
+        This method returns immediately after stopping the recording and
+        preparing the audio. Transcription happens in a background thread,
+        and results are communicated via callbacks.
 
         Returns:
-            The transcribed text as a string, or None if transcription failed or
-            no audio was recorded.
+            True if recording was stopped and transcription started, False otherwise.
         """
         if not self.is_recording:
             logger.warning("No recording in progress to stop.")
-            return None
+            return False
 
         self.stop_event.set()
         if self.recording_thread and self.recording_thread.is_alive():
-            self.recording_thread.join(timeout=2)
+            self.recording_thread.join(timeout=5.0)  # Increased timeout
+            if self.recording_thread.is_alive():
+                logger.warning("Recording thread did not stop within timeout")
 
         self.is_recording = False
         if self.on_status_change:
             self.on_status_change("Processing audio...")
 
-        if not self.audio_data:
+        # Collect all audio data from queue
+        audio_chunks = []
+        while not self.audio_data.empty():
+            try:
+                audio_chunks.append(self.audio_data.get_nowait())
+            except queue.Empty:
+                break
+
+        if not audio_chunks:
             logger.warning("No audio data was recorded.")
             if self.on_status_change:
                 self.on_status_change("Ready.")
-            return None
+            if self.on_transcription_failed:
+                self.on_transcription_failed("No audio data was recorded.")
+            return False
 
-        audio_array = np.concatenate(self.audio_data, axis=0).astype(np.float32)
+        audio_array = np.concatenate(audio_chunks, axis=0).astype(np.float32)
         
         # Normalize audio to the range [-1, 1]
         max_abs = np.max(np.abs(audio_array))
         if max_abs > 0:
             audio_array = audio_array / max_abs
 
-        logger.info(f"Transcribing {len(audio_array) / 16000:.2f} seconds of audio.")
-        result = self._transcribe_audio(audio_array)
-        logger.info(f"Transcription result: '{result}'")
-
-        if self.on_status_change:
-            self.on_status_change("Ready.")
+        logger.info(f"Starting transcription for {len(audio_array) / 16000:.2f} seconds of audio.")
         
-        return result
+        # Start transcription in background thread
+        if not self.is_initialized or self.model is None:
+            logger.error("Transcription attempted before model was initialized.")
+            if self.on_status_change:
+                self.on_status_change("Error: Model not initialized.")
+            if self.on_transcription_failed:
+                self.on_transcription_failed("Model not initialized.")
+            return False
+        
+        # Clean up any existing worker
+        if self.transcription_worker and self.transcription_worker.isRunning():
+            self.transcription_worker.terminate()
+            self.transcription_worker.wait()
+        
+        # Create and start new worker
+        self.transcription_worker = TranscriptionWorker(
+            self.model, audio_array, self.config, self.model_lock
+        )
+        
+        # Connect worker signals to callbacks
+        if self.on_transcription_complete:
+            self.transcription_worker.transcription_complete.connect(self._on_transcription_complete)
+        if self.on_transcription_failed:
+            self.transcription_worker.transcription_failed.connect(self._on_transcription_failed)
+        if self.on_transcription_progress:
+            self.transcription_worker.transcription_progress.connect(self.on_transcription_progress)
+        
+        self.transcription_worker.start()
+        return True
+    
+    def _on_transcription_complete(self, text: str):
+        """Internal handler for transcription completion."""
+        logger.info(f"Transcription result: '{text}'")
+        if self.on_transcription_complete:
+            self.on_transcription_complete(text)
+    
+    def _on_transcription_failed(self, error: str):
+        """Internal handler for transcription failure."""
+        logger.error(f"Transcription failed: {error}")
+        if self.on_transcription_failed:
+            self.on_transcription_failed(error)
 
     def _record_audio(self):
         """
@@ -193,29 +322,55 @@ class VoiceClickEngine:
             def audio_callback(indata, frames, time_info, status):
                 if status:
                     logger.warning(f"Audio callback status: {status}")
-                self.audio_data.append(indata.copy())
+                try:
+                    if indata.ndim > 1:
+                        # If stereo, take only the first channel
+                        indata = indata[:, 0]
+                    self.audio_data.put_nowait(indata.copy())
+                except queue.Full:
+                    logger.warning("Audio data queue full, dropping chunk")
                 self._update_volume(indata)
 
-            self.stream = sd.InputStream(
-                samplerate=sample_rate,
-                channels=channels,
-                blocksize=blocksize,
-                callback=audio_callback,
-                dtype=np.float32,
-                device=self.config.microphone_device,
-            )
+            try:
+                self.stream = sd.InputStream(
+                    samplerate=sample_rate,
+                    channels=channels,
+                    blocksize=blocksize,
+                    callback=audio_callback,
+                    dtype=np.float32,
+                    device=self.config.microphone_device,
+                )
+            except sd.PortAudioError as e:
+                logger.error(f"Failed to open audio device: {e}")
+                if self.on_status_change:
+                    self.on_status_change(f"Error: Audio device unavailable. {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Failed to initialize audio stream: {e}")
+                if self.on_status_change:
+                    self.on_status_change(f"Error: Could not initialize audio. {e}")
+                raise
+
             with self.stream:
                 while not self.stop_event.is_set():
                     self._check_recording_limits()
                     time.sleep(0.1)
+        except sd.PortAudioError as e:
+            logger.exception(f"Audio device error: {e}")
+            if self.on_status_change:
+                self.on_status_change(f"Error: Audio device failed. {e}")
         except Exception as e:
             logger.exception(f"Error in audio recording thread: {e}")
             if self.on_status_change:
                 self.on_status_change(f"Error: Audio recording failed. {e}")
         finally:
             if self.stream:
-                self.stream.close()
-                self.stream = None
+                try:
+                    self.stream.close()
+                except Exception as e:
+                    logger.warning(f"Error closing audio stream: {e}")
+                finally:
+                    self.stream = None
             self.stop_event.set()
 
     def _update_volume(self, audio_chunk: np.ndarray):
@@ -268,33 +423,6 @@ class VoiceClickEngine:
         
         return False
 
-    def _transcribe_audio(self, audio: np.ndarray) -> Optional[str]:
-        """
-        Transcribes an audio array using the loaded Whisper model.
-
-        Args:
-            audio: A NumPy array containing the audio data.
-
-        Returns:
-            The transcribed text as a string, or None on error.
-        """
-        if not self.is_initialized or self.model is None:
-            logger.error("Transcription attempted before model was initialized.")
-            return None
-        
-        try:
-            with self.model_lock:
-                segments, info = self.model.transcribe(
-                    audio,
-                    language=self.config.language if self.config.language != "auto" else None,
-                    beam_size=5,
-                )
-                
-                text = " ".join(segment.text for segment in segments).strip()
-                return text if text else None
-        except Exception as e:
-            logger.exception(f"Transcription failed: {e}")
-            return None
 
     def get_status(self) -> dict:
         """
@@ -311,3 +439,41 @@ class VoiceClickEngine:
             "device": self.config.whisper_device,
             "recording_time": elapsed,
         }
+    
+    def cleanup(self):
+        """
+        Ensures all resources are properly cleaned up.
+        Should be called when the engine is no longer needed.
+        """
+        logger.info("Cleaning up VoiceClickEngine resources...")
+        
+        # Stop recording if active
+        if self.is_recording:
+            self.stop_event.set()
+            if self.recording_thread and self.recording_thread.is_alive():
+                self.recording_thread.join(timeout=5.0)
+            self.is_recording = False
+        
+        # Stop transcription worker if running
+        if self.transcription_worker and self.transcription_worker.isRunning():
+            self.transcription_worker.terminate()
+            self.transcription_worker.wait(timeout=2.0)
+            self.transcription_worker = None
+        
+        # Close audio stream
+        if self.stream:
+            try:
+                self.stream.close()
+            except Exception as e:
+                logger.warning(f"Error closing stream during cleanup: {e}")
+            finally:
+                self.stream = None
+        
+        # Clear audio data queue
+        while not self.audio_data.empty():
+            try:
+                self.audio_data.get_nowait()
+            except queue.Empty:
+                break
+        
+        logger.info("VoiceClickEngine cleanup complete.")

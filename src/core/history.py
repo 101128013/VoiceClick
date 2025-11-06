@@ -24,18 +24,18 @@ class TranscriptionRecord:
     Represents a single transcription event.
     
     Attributes:
-        id: A unique identifier for the record, generated from the timestamp.
         timestamp: The ISO 8601 formatted timestamp of when the transcription occurred.
         text: The transcribed text.
         duration_seconds: The duration of the audio that was transcribed.
         model_used: The name of the Whisper model used for the transcription.
+        id: A unique identifier for the record, generated from the timestamp.
         language: The language of the transcribed text.
     """
-    id: str = field(default_factory=lambda: datetime.now().isoformat())
     timestamp: str
     text: str
     duration_seconds: float
     model_used: str
+    id: str = field(default_factory=lambda: datetime.now().isoformat())
     language: str = "en"
 
 

@@ -8,7 +8,6 @@ It uses a combination of clipboard and keyboard simulation for robust text inser
 
 import logging
 import time
-from typing import Optional
 
 try:
     import pyperclip
@@ -19,6 +18,7 @@ except ImportError as e:
     raise
 
 from src.core.text_field_monitor import TextFieldMonitor, TextFieldInfo
+from src.core.utils import retry_operation
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ class TextDetector:
             logger.info(f"Successfully inserted text of length {len(text)}.")
             return True
         
-        logger.error("Failed to insert text using all available methods.")
+        logger.error(f"Failed to insert text using clipboard method. Text length: {len(text)}")
         return False
 
     def _insert_via_clipboard(self, text: str) -> bool:
@@ -104,6 +104,7 @@ class TextDetector:
         Inserts text by setting the clipboard and simulating a paste command.
 
         This method temporarily saves and restores the user's clipboard content.
+        Includes retry logic for clipboard operations.
 
         Args:
             text: The text to insert.
@@ -111,22 +112,31 @@ class TextDetector:
         Returns:
             True on success, False on failure.
         """
-        original_clipboard_content = None
-        try:
-            # 1. Save the current clipboard content
-            original_clipboard_content = pyperclip.paste()
-        except Exception as e:
-            logger.warning(f"Could not read from clipboard to save content: {e}")
+        # 1. Save the current clipboard content (with retry)
+        original_clipboard_content = retry_operation(
+            operation=pyperclip.paste,
+            operation_name="clipboard read"
+        )
 
         try:
-            # 2. Set the new text to the clipboard
-            pyperclip.copy(text)
-            time.sleep(0.05)  # Small delay to ensure the clipboard is updated
+            # 2. Set the new text to the clipboard (with retry)
+            def set_clipboard():
+                pyperclip.copy(text)
+                time.sleep(0.05)  # Small delay to ensure the clipboard is updated
+                return True
+            
+            if not retry_operation(set_clipboard, operation_name="clipboard write"):
+                logger.error("Failed to set clipboard")
+                return False
 
             # 3. Simulate Ctrl+V to paste
-            with self.keyboard_controller.pressed(Key.ctrl):
-                self.keyboard_controller.press('v')
-                self.keyboard_controller.release('v')
+            try:
+                with self.keyboard_controller.pressed(Key.ctrl):
+                    self.keyboard_controller.press('v')
+                    self.keyboard_controller.release('v')
+            except Exception as e:
+                logger.error(f"Failed to simulate paste keystroke: {e}")
+                return False
             
             time.sleep(0.1) # Allow time for the paste action to complete
             return True
@@ -134,12 +144,12 @@ class TextDetector:
             logger.error(f"Failed to insert text via clipboard: {e}", exc_info=True)
             return False
         finally:
-            # 4. Restore the original clipboard content
+            # 4. Restore the original clipboard content (non-critical, but logged)
             if original_clipboard_content is not None:
-                try:
-                    pyperclip.copy(original_clipboard_content)
-                except Exception as e:
-                    logger.warning(f"Failed to restore original clipboard content: {e}")
+                retry_operation(
+                    operation=lambda: pyperclip.copy(original_clipboard_content),
+                    operation_name="clipboard restore"
+                )
 
     def _insert_via_typing(self, text: str) -> bool:
         """

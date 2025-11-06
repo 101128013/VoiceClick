@@ -6,12 +6,10 @@ enabling auto-start recording on click functionality.
 """
 
 import logging
-import threading
 import time
-from typing import Optional, Callable, Tuple
+from typing import Optional, Callable
 
 try:
-    from pynput import mouse
     from pynput.mouse import Listener, Button
     MOUSE_AVAILABLE = True
 except ImportError:
@@ -19,11 +17,12 @@ except ImportError:
     logging.warning("pynput mouse not available. Click detection disabled.")
 
 from src.core.text_field_monitor import TextFieldMonitor, TextFieldInfo
+from src.core.base_monitor import BaseMonitor
 
 logger = logging.getLogger(__name__)
 
 
-class ClickMonitor:
+class ClickMonitor(BaseMonitor):
     """
     Monitors mouse clicks and detects clicks on text fields.
     
@@ -31,30 +30,34 @@ class ClickMonitor:
     to determine when a user clicks on a text input field.
     """
     
-    def __init__(self, text_field_monitor: Optional[TextFieldMonitor] = None):
+    def __init__(self, text_field_monitor: Optional[TextFieldMonitor] = None, cooldown_period: float = 2.0, debounce_delay: float = 0.2):
         """
         Initializes the ClickMonitor.
         
         Args:
             text_field_monitor: Optional TextFieldMonitor instance. If None, creates one.
+            cooldown_period: Seconds between activations (default: 2.0)
+            debounce_delay: Minimum delay between clicks (default: 0.2)
         """
+        super().__init__(cooldown_period=cooldown_period, debounce_delay=debounce_delay)
+        
         if not MOUSE_AVAILABLE:
             logger.warning("Mouse monitoring not available. Click detection disabled.")
             self.available = False
+            self.monitoring = False
+            self.listener = None
+            self.text_field_monitor = None
+            self.last_click_time = 0.0
             return
         
         self.available = True
         self.text_field_monitor = text_field_monitor or TextFieldMonitor()
         self.monitoring = False
         self.listener: Optional[Listener] = None
-        self.callbacks: list[Callable[[TextFieldInfo], None]] = []
         
         # State tracking
         self.last_click_time: float = 0.0
-        self.debounce_delay: float = 0.2  # 200ms debounce
-        self.cooldown_period: float = 2.0  # 2 seconds cooldown
-        self.last_activation_time: float = 0.0
-        
+    
     def register_callback(self, callback: Callable[[TextFieldInfo], None]):
         """
         Registers a callback to be called when a text field is clicked.
@@ -66,15 +69,11 @@ class ClickMonitor:
             logger.warning("Click monitoring not available. Callback not registered.")
             return
         
-        if callback not in self.callbacks:
-            self.callbacks.append(callback)
-            logger.info(f"Registered click callback: {callback.__name__}")
+        super().register_callback(callback, "click callback")
     
     def unregister_callback(self, callback: Callable[[TextFieldInfo], None]):
         """Unregisters a callback."""
-        if callback in self.callbacks:
-            self.callbacks.remove(callback)
-            logger.info(f"Unregistered click callback: {callback.__name__}")
+        super().unregister_callback(callback, "click callback")
     
     def start_monitoring(self):
         """Starts monitoring mouse clicks."""
@@ -104,9 +103,19 @@ class ClickMonitor:
         if self.listener:
             try:
                 self.listener.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Error stopping click listener: {e}")
+            finally:
+                self.listener = None
         logger.info("Click monitoring stopped.")
+    
+    def cleanup(self):
+        """
+        Ensures all resources are properly cleaned up.
+        Should be called when the monitor is no longer needed.
+        """
+        self.stop_monitoring()
+        super().cleanup()
     
     def _on_click(self, x: int, y: int, button: Button, pressed: bool):
         """
@@ -138,27 +147,11 @@ class ClickMonitor:
             
             if field_info.is_text_field and not field_info.is_password_field:
                 # Check cooldown period
-                if (current_time - self.last_activation_time) >= self.cooldown_period:
-                    self._notify_callbacks(field_info)
-                    self.last_activation_time = current_time
+                if self._check_cooldown(current_time):
+                    self._notify_callbacks(field_info, "click callback")
+                    self._update_activation_time(current_time)
                     logger.info(f"Text field clicked: {field_info.application_name} - {field_info.window_title}")
         except Exception as e:
             logger.error(f"Error processing click: {e}", exc_info=True)
     
-    def _notify_callbacks(self, field_info: TextFieldInfo):
-        """Notifies all registered callbacks of a click event."""
-        for callback in self.callbacks:
-            try:
-                callback(field_info)
-            except Exception as e:
-                logger.error(f"Error in click callback {callback.__name__}: {e}", exc_info=True)
-    
-    def set_cooldown_period(self, seconds: float):
-        """Sets the cooldown period between activations."""
-        self.cooldown_period = max(0.0, seconds)
-        logger.info(f"Click cooldown period set to {self.cooldown_period}s")
-    
-    def reset_cooldown(self):
-        """Resets the cooldown timer."""
-        self.last_activation_time = 0.0
 

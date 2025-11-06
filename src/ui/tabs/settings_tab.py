@@ -7,15 +7,15 @@ recording behavior.
 """
 
 import logging
+from pathlib import Path
 
 import sounddevice as sd
-
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QComboBox, QSpinBox,
-    QCheckBox, QPushButton, QMessageBox, QFormLayout
+    QCheckBox, QPushButton, QMessageBox, QFormLayout, QFrame, QHBoxLayout
 )
-from PyQt6.QtGui import QFont
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtCore import pyqtSignal, QSize
 
 from src.config.settings import SettingsManager
 from src.config import constants
@@ -39,6 +39,8 @@ class SettingsTab(QWidget):
         """
         super().__init__()
         self.settings_manager = settings_manager
+        # Icon directory (relative to repo root)
+        self.icon_dir = Path(__file__).resolve().parents[4] / 'resources' / 'icons'
         self.setup_ui()
         self.load_settings()
         self.connect_signals()
@@ -46,24 +48,43 @@ class SettingsTab(QWidget):
     def setup_ui(self):
         """Sets up the user interface for the settings tab."""
         main_layout = QVBoxLayout(self)
-        form_layout = QFormLayout()
+        main_layout.setSpacing(20)
+        main_layout.setContentsMargins(20, 20, 20, 20)
 
         title = QLabel("Settings")
-        title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        title.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
+        title.setStyleSheet("color: #61afef; margin-bottom: 15px;")
         main_layout.addWidget(title)
+
+        # Settings Card
+        settings_card = QFrame()
+        settings_card.setStyleSheet("""
+            QFrame {
+                background-color: #21252b;
+                border: 1px solid #3e4451;
+                border-radius: 8px;
+                padding: 20px;
+            }
+        """)
+        form_layout = QFormLayout(settings_card)
+        form_layout.setSpacing(12)
+        form_layout.setContentsMargins(10, 10, 10, 10)
 
         # Model and Device Settings
         self.model_combo = QComboBox()
         self.model_combo.addItems(constants.WHISPER_MODELS)
-        form_layout.addRow("Whisper Model:", self.model_combo)
+        self.model_combo.setStyleSheet(self._get_combo_style())
+        form_layout.addRow(self._create_form_label("Whisper Model:"), self.model_combo)
 
         self.device_combo = QComboBox()
         self.device_combo.addItems(constants.COMPUTE_DEVICES)
-        form_layout.addRow("Compute Device:", self.device_combo)
+        self.device_combo.setStyleSheet(self._get_combo_style())
+        form_layout.addRow(self._create_form_label("Compute Device:"), self.device_combo)
 
         self.compute_type_combo = QComboBox()
         self.compute_type_combo.addItems(constants.COMPUTE_TYPES)
-        form_layout.addRow("Compute Type:", self.compute_type_combo)
+        self.compute_type_combo.setStyleSheet(self._get_combo_style())
+        form_layout.addRow(self._create_form_label("Compute Type:"), self.compute_type_combo)
 
         # Language Selection
         self.language_combo = QComboBox()
@@ -82,29 +103,52 @@ class SettingsTab(QWidget):
         ]
         for display_name, code in languages:
             self.language_combo.addItem(display_name, code)
-        form_layout.addRow("Language:", self.language_combo)
+        self.language_combo.setStyleSheet(self._get_combo_style())
+        form_layout.addRow(self._create_form_label("Language:"), self.language_combo)
 
         # Microphone Selection
         self.microphone_combo = QComboBox()
         self._populate_microphones()
-        form_layout.addRow("Microphone:", self.microphone_combo)
+        self.microphone_combo.setStyleSheet(self._get_combo_style())
+        form_layout.addRow(self._create_form_label("Microphone:"), self.microphone_combo)
 
         # Recording Settings
         self.silence_spinbox = QSpinBox()
         self.silence_spinbox.setRange(1, 60)
         self.silence_spinbox.setSuffix(" s")
-        form_layout.addRow("Silence Duration:", self.silence_spinbox)
+        self.silence_spinbox.setStyleSheet(self._get_spinbox_style())
+        form_layout.addRow(self._create_form_label("Silence Duration:"), self.silence_spinbox)
 
         self.autostart_focus_check = QCheckBox("Auto-start on text field focus")
-        form_layout.addRow(self.autostart_focus_check)
+        self.autostart_focus_check.setStyleSheet(self._get_checkbox_style())
+        form_layout.addRow("", self.autostart_focus_check)
         
         self.autostart_click_check = QCheckBox("Auto-start on left click")
-        form_layout.addRow(self.autostart_click_check)
+        self.autostart_click_check.setStyleSheet(self._get_checkbox_style())
+        form_layout.addRow("", self.autostart_click_check)
 
-        self.save_button = QPushButton("Save Settings")
-        
-        main_layout.addLayout(form_layout)
+        main_layout.addWidget(settings_card)
         main_layout.addStretch()
+
+        # Save Button
+        self.save_button = QPushButton("Save Settings")
+        self.save_button.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        self.save_button.setStyleSheet("""
+            QPushButton {
+                background-color: #98C379;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 20px;
+                min-height: 40px;
+            }
+            QPushButton:hover {
+                background-color: #83AD6B;
+            }
+            QPushButton:pressed {
+                background-color: #729B5C;
+            }
+        """)
         main_layout.addWidget(self.save_button)
 
     def _populate_microphones(self):
@@ -186,4 +230,115 @@ class SettingsTab(QWidget):
         
         QMessageBox.information(self, "Settings Saved", "Your settings have been saved successfully.")
         logger.info("Settings saved from UI.")
+
+    def _create_form_label(self, text: str) -> QLabel:
+        """Creates a styled label for form fields."""
+        label = QLabel(text)
+        label.setFont(QFont("Segoe UI", 10, QFont.Weight.Normal))
+        label.setStyleSheet("color: #ABB2BF; padding: 5px;") # Dark theme text color
+        return label
+
+    def _get_combo_style(self) -> str:
+        """Returns style sheet for combo boxes."""
+        chevron_path = str(self.icon_dir / 'chevron-down.svg')
+        return f"""
+            QComboBox {{
+                background-color: #21252b;
+                border: 1px solid #5C6370;
+                border-radius: 4px;
+                padding: 5px;
+                font-size: 10pt;
+                min-width: 200px;
+                color: #ABB2BF;
+            }}
+            QComboBox:hover {{
+                border-color: #61afef;
+            }}
+            QComboBox:focus {{
+                border-color: #61afef;
+                background-color: #282c34;
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 20px;
+            }}
+            QComboBox::down-arrow {{
+                image: url("{chevron_path}");
+                width: 12px;
+                height: 12px;
+            }}
+        """
+
+    def _get_spinbox_style(self) -> str:
+        """
+        Returns style sheet for spin boxes.
+        """
+        up_path = str(self.icon_dir / 'arrow-up.svg')
+        down_path = str(self.icon_dir / 'arrow-down.svg')
+        css_template = """
+            QSpinBox {{
+                background-color: #21252b;
+                border: 1px solid #5C6370;
+                border-radius: 4px;
+                padding: 5px;
+                font-size: 10pt;
+                min-width: 100px;
+                color: #ABB2BF;
+            }}
+            QSpinBox:hover {{
+                border-color: #61afef;
+            }}
+            QSpinBox:focus {{
+                border-color: #61afef;
+                background-color: #282c34;
+            }}
+            QSpinBox::up-button, QSpinBox::down-button {{
+                border: none;
+                background-color: #3e4451;
+                width: 18px;
+                border-radius: 2px;
+            }}
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
+                background-color: #4b5263;
+            }}
+            QSpinBox::up-arrow {{
+                image: url("{up_path}");
+                width: 10px;
+                height: 10px;
+            }}
+            QSpinBox::down-arrow {{
+                image: url("{down_path}");
+                width: 10px;
+                height: 10px;
+            }}
+        """
+        return css_template.format(up_path=up_path, down_path=down_path)
+
+    def _get_checkbox_style(self) -> str:
+        """
+        Returns style sheet for checkboxes.
+        """
+        return """
+            QCheckBox {
+                font-size: 10pt;
+                color: #ABB2BF;
+                spacing: 6px;
+                padding: 4px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 1px solid #5C6370;
+                border-radius: 3px;
+                background-color: #21252b;
+            }
+            QCheckBox::indicator:hover {
+                border-color: #61afef;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #98C379;
+                border-color: #98C379;
+                image: none;
+            }
+        """
 

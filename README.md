@@ -17,41 +17,81 @@
 
 ## Installation
 
-### Prerequisites
+### For End Users (Recommended)
 
+**No Python Required!** VoiceClick comes as a standalone Windows application.
+
+1. **Download the Installer**
+   - Download `VoiceClick-Setup-v1.0.0.exe` from the [Releases](https://github.com/your-username/VoiceClick/releases) page
+   - Or download the portable ZIP version if you prefer no installation
+
+2. **Run the Installer**
+   - Double-click `VoiceClick-Setup-v1.0.0.exe`
+   - Follow the installation wizard
+   - Choose installation directory (default: `C:\Program Files\VoiceClick\`)
+   - Optionally create desktop shortcut and start with Windows
+
+3. **Launch VoiceClick**
+   - Find VoiceClick in the Start Menu
+   - Or use the desktop shortcut if created
+   - First run will download the Whisper model (may take a few minutes)
+
+**System Requirements:**
+- Windows 10 or 11 (64-bit)
+- 4GB RAM minimum (8GB recommended)
+- [NVIDIA GPU with CUDA support](https://developer.nvidia.com/cuda-gpus) (optional, recommended for best performance)
+- Internet connection (for initial model download)
+
+### For Developers
+
+If you want to run from source or contribute to development:
+
+**Prerequisites:**
 - Windows 10 or 11
 - Python 3.9+
-- [NVIDIA GPU with CUDA support](https://developer.nvidia.com/cuda-gpus) (recommended for best performance)
+- [NVIDIA GPU with CUDA support](https://developer.nvidia.com/cuda-gpus) (recommended)
 - [Git](https://git-scm.com/downloads)
 
-### Steps
+**Steps:**
 
-1.  **Clone the Repository**:
-    ```bash
-    git clone https://github.com/your-username/VoiceClick.git
-    cd VoiceClick
-    ```
+1. **Clone the Repository**:
+   ```bash
+   git clone https://github.com/your-username/VoiceClick.git
+   cd VoiceClick
+   ```
 
-2.  **Create a Virtual Environment**:
-    It's highly recommended to use a virtual environment to manage dependencies.
-    ```bash
-    python -m venv venv
-    venv\Scripts\activate
-    ```
+2. **Create a Virtual Environment**:
+   ```bash
+   python -m venv venv
+   venv\Scripts\activate
+   ```
 
-3.  **Install Dependencies**:
-    The application requires several packages, including `PyQt6`, `faster-whisper`, and `sounddevice`. Install them using the `requirements.txt` file.
-    ```bash
-    pip install -r requirements.txt
-    ```
-    *Note: If you do not have a CUDA-enabled GPU, `faster-whisper` will automatically use the CPU. The installation may take some time as it downloads necessary libraries.*
+3. **Install Dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-4.  **Run the Application**:
-    Once the dependencies are installed, you can run the application from the root directory.
-    ```bash
-    python app.py
-    ```
-    The first time you run the app, it will download the default Whisper model (`large-v3`), which may take a few minutes depending on your internet connection.
+4. **Run the Application**:
+   ```bash
+   python app.py
+   ```
+
+### Building from Source
+
+To create your own executable, see [docs/build.md](docs/build.md) for detailed instructions.
+
+Quick start:
+1. Install PyInstaller: `pip install pyinstaller`
+2. Run build script: `python scripts/build.py`
+3. Find output in `dist/` directory
+
+## Documentation
+
+- **[User Guide](docs/user-guide.md)** - Complete guide for using VoiceClick
+- **[Quick Start](docs/quick-start.md)** - Get started in minutes
+- **[Quick Reference](docs/quick-reference.md)** - Quick reference card
+- **[Build Guide](docs/build.md)** - Building from source
+- **[Deployment Guide](docs/deployment.md)** - Distribution and deployment
 
 ## How It Works
 

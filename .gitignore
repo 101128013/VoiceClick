@@ -61,7 +61,24 @@ models/
 htmlcov/
 .coverage
 
-# Build artifacts
-Voice-Click-Setup.exe
+# Build outputs
 build/
 dist/
+*.spec.bak
+*.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Installer outputs
+installer/Output/
+*.exe
+!src/resources/icons/*.exe
+
+# Portable versions
+VoiceClick-Portable-*.zip
+Voice-Click-Setup.exe
+
+# PyInstaller
+*.manifest
+*.spec.bak
