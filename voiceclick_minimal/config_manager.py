@@ -69,7 +69,7 @@ class ConfigManager:
         """Saves the current configuration to file."""
         try:
             # Use model_dump to get a dictionary representation of the config
-            data = self.config.model_dump(mode='json', indent=2)
+            data = self.config.model_dump(mode='json')
             self.CONFIG_FILE.write_text(json.dumps(data, indent=2))
             logger.info(f"Configuration saved to {self.CONFIG_FILE}")
         except Exception as e:
