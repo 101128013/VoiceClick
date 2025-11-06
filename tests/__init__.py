@@ -1,3 +1,0 @@
-"""
-VoiceClick Test Suite
-"""

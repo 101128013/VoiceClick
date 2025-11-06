@@ -1,9 +1,5 @@
 # VoiceClick Project Dependencies
 
-# UI Framework
-PyQt6==6.6.0
-PyQt6-sip==13.6.0
-
 # Audio & Speech Recognition
 faster-whisper==1.1.0
 numpy==1.24.0

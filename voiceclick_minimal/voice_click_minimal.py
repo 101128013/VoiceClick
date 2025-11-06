@@ -27,6 +27,7 @@ import json
 from pathlib import Path
 import pyperclip  # For clipboard functionality
 import traceback  # For detailed error logging
+from .config_manager import config_manager
 
 # Setup enhanced logging with both console and file output
 LOG_FILE = Path.home() / ".voice_click.log"
@@ -83,51 +84,228 @@ class GUITHREADINFO(Structure):
     ]
 
 # Configuration
-SAMPLE_RATE = 16000
-REQUIRE_TEXT_FIELD = True  # Set to False to record anywhere, True to require text field
+SAMPLE_RATE = 16000 # Fixed audio setting
 
-# Whisper Model Configuration - GPU ACCELERATED with RTX 5060 Ti
-# Using CUDA 13.0 for full RTX 5060 Ti support
-WHISPER_MODEL = "base"  # Options: tiny, base, small, medium, large-v2, large-v3
-WHISPER_DEVICE = "cuda"   # Options: "cuda" for GPU, "cpu" for CPU
-WHISPER_COMPUTE_TYPE = "float16"  # Options: "float16" (GPU), "int8" (CPU), "float32"
-
-# Accessibility / auto-start options
-AUTO_START_ON_FOCUS = False         # Start recording automatically when a text field receives focus
-AUTO_START_ON_LEFT_CLICK = True    # Start recording when user left-clicks into a text field
-AUTO_START_DELAY = 0.12            # Delay (s) after focus/click to allow caret/focus to settle
-IGNORE_PASSWORD_FIELDS = True      # Do not auto-start on password fields
-IGNORE_FULLSCREEN_GAMES = True     # Do not auto-start during fullscreen games
-
-# Auto-stop Configuration
-ENABLE_SILENCE_AUTO_STOP = True    # Auto-stop when user stops speaking
-SILENCE_DURATION = 8.0             # Seconds of silence before auto-stop (when enabled)
-ENABLE_MANUAL_STOP = True          # Allow middle-click to manually stop recording
-
+# History file location (fixed)
 HISTORY_FILE = Path.home() / ".voice_click_history.json"
-MAX_HISTORY = 50  # Keep last 50 transcriptions
-VOLUME_THRESHOLD = 0.02  # Minimum volume to consider as speech
-SILENCE_TIMEOUT = 0  # Auto-stop after silence (0 to disable) - DISABLED (now controlled by ENABLE_SILENCE_AUTO_STOP)
-MAX_RECORDING_TIME = 300  # Max recording duration in seconds (5 minutes)
+
+# NOTE: All configuration constants are now accessed via config_manager.get('key')
 
 # Globals
 is_recording = False
 audio_queue = Queue()  # Thread-safe audio buffer
 model = None
 status_widget = None
+settings_widget = None # New global for settings widget
 recording_start_time = 0
-beep_thread = None
-stop_beeping = False
-recording_lock = threading.Lock()  # Thread safety
 current_volume = 0.0
-transcription_history = deque(maxlen=MAX_HISTORY)
+transcription_history = deque(maxlen=config_manager.get('max_history'))
 last_silence_time = 0
 auto_stopped = False
 focus_monitor_thread = None
 focus_monitor_stop = False
 original_focused_hwnd = None  # Track focused control when recording starts
+mouse_move_history = deque(maxlen=10) # Store (x, y, timestamp) for shake detection
+beep_thread = None
+stop_beeping = False
+recording_lock = threading.Lock()  # Thread safety
 
-# Status Widget (appears only during recording/transcribing)
+# --- Settings Widget ---
+
+def toggle_settings_widget():
+    """Toggles the visibility of the settings widget."""
+    global settings_widget
+    if settings_widget:
+        if settings_widget.is_visible:
+            settings_widget.hide()
+        else:
+            settings_widget.show()
+
+class SettingsWidget:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.root.overrideredirect(True)
+        self.root.attributes('-topmost', True)
+        self.root.attributes('-alpha', 0.95)
+        self.is_visible = False
+        
+        # 1. Update Widget Dimensions: 600x500 (Increased height for button visibility)
+        w, h = 600, 500
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        x = screen_width - w - 10
+        y = screen_height - h - 50 # Position above the taskbar
+        
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
+        
+        # Dragging setup
+        self._offsetx = 0
+        self._offsety = 0
+        self.root.bind('<Button-1>', self.start_move)
+        self.root.bind('<ButtonRelease-1>', self.stop_move)
+        self.root.bind('<B1-Motion>', self.do_move)
+        
+        self.descriptions = config_manager.get_descriptions() # Fetch descriptions
+        
+        # Use a style for better appearance
+        self.style = ttk.Style()
+        self.style.theme_use('clam') # Use a theme that supports customization
+        self.style.configure('TNotebook', background='#3c3c3c', borderwidth=0)
+        self.style.configure('TNotebook.Tab', background='#505050', foreground='white', padding=[10, 5])
+        self.style.map('TNotebook.Tab', background=[('selected', '#2ecc71')], foreground=[('selected', 'black')])
+        self.style.configure('TFrame', background='#3c3c3c')
+        self.style.configure('TLabel', background='#3c3c3c', foreground='white')
+        self.style.configure('TCheckbutton', background='#3c3c3c', foreground='white')
+        self.style.configure('TCombobox', fieldbackground='white', foreground='black')
+        
+        self.frame = ttk.Frame(self.root, padding="5 5 5 5")
+        self.frame.pack(fill=tk.BOTH, expand=True)
+        
+        tk.Label(self.frame, text="VoiceClick Settings", font=('Segoe UI', 14, 'bold'), fg='white', bg='#3c3c3c').pack(pady=5)
+        
+        # 2. Implement Tabbed Layout
+        self.notebook = ttk.Notebook(self.frame)
+        self.notebook.pack(pady=10, padx=5, fill=tk.BOTH, expand=True)
+        
+        # 3. Define and link 18 tk.Variable instances
+        self.vars = {}
+        self.settings_map = {
+            # Tab 1: General & Mouse
+            'General & Mouse': [
+                ('mouse_shake_threshold_px', tk.IntVar, 'Mouse Shake Threshold (px):', 'Entry', None),
+                ('mouse_shake_time_ms', tk.IntVar, 'Mouse Shake Time (ms):', 'Entry', None),
+                ('enable_manual_stop', tk.BooleanVar, 'Enable Manual Stop (Middle-Click):', 'Checkbutton', None),
+                ('require_text_field', tk.BooleanVar, 'Require Text Field to Start:', 'Checkbutton', None),
+                ('max_history', tk.IntVar, 'Max History Entries:', 'Entry', None),
+            ],
+            # Tab 2: Auto-Start
+            'Auto-Start': [
+                ('auto_start_on_focus', tk.BooleanVar, 'Auto-Start on Text Field Focus:', 'Checkbutton', None),
+                ('auto_start_on_left_click', tk.BooleanVar, 'Auto-Start on Left-Click:', 'Checkbutton', None),
+                ('auto_start_delay', tk.DoubleVar, 'Auto-Start Delay (s):', 'Entry', None),
+                ('ignore_password_fields', tk.BooleanVar, 'Ignore Password Fields:', 'Checkbutton', None),
+                ('ignore_fullscreen_games', tk.BooleanVar, 'Ignore Fullscreen Games:', 'Checkbutton', None),
+            ],
+            # Tab 3: Audio & Auto-Stop
+            'Audio & Auto-Stop': [
+                ('volume_threshold', tk.DoubleVar, 'Volume Threshold (RMS):', 'Entry', None),
+                ('enable_silence_auto_stop', tk.BooleanVar, 'Enable Silence Auto-Stop:', 'Checkbutton', None),
+                ('silence_duration', tk.DoubleVar, 'Silence Duration (s):', 'Entry', None),
+                ('max_recording_time', tk.IntVar, 'Max Recording Time (s):', 'Entry', None),
+                ('enable_audio_feedback', tk.BooleanVar, 'Enable Audio Feedback (Beeps):', 'Checkbutton', None), # New setting
+            ],
+            # Tab 4: Transcription Model
+            'Transcription Model': [
+                ('whisper_model', tk.StringVar, 'Whisper Model:', 'Combobox', ['tiny', 'base', 'small', 'medium', 'large-v2', 'large-v3']),
+                ('whisper_device', tk.StringVar, 'Whisper Device:', 'Combobox', ['cpu', 'cuda']),
+                ('whisper_compute_type', tk.StringVar, 'Compute Type:', 'Combobox', ['float16', 'int8', 'float32']),
+                ('transcription_language', tk.StringVar, 'Transcription Language:', 'Combobox', ['en', 'tr', 'de']),
+            ]
+        }
+        
+        # 4. Implement UI controls
+        for tab_name, settings in self.settings_map.items():
+            tab = ttk.Frame(self.notebook, padding="10")
+            self.notebook.add(tab, text=tab_name)
+            
+            for key, var_type, label_text, control_type, options in settings:
+                self.vars[key] = var_type(value=config_manager.get(key))
+                description = self.descriptions.get(key, "No description available.")
+                self._create_control(tab, key, label_text, control_type, options, description)
+
+        # Save/Close Button
+        tk.Button(self.frame, text="Save & Close", command=self.save_and_hide, bg='#2ecc71', fg='black', relief=tk.FLAT, font=('Segoe UI', 10, 'bold')).pack(pady=10)
+
+    def _create_control(self, parent, key, label_text, control_type, options=None, description=""):
+        """Helper function to create a setting control."""
+        
+        # Container frame for label, control, and description
+        main_frame = ttk.Frame(parent)
+        main_frame.pack(fill=tk.X, pady=2, padx=5)
+        
+        # Frame for label and control (top row)
+        control_frame = ttk.Frame(main_frame)
+        control_frame.pack(fill=tk.X)
+        
+        # Label
+        ttk.Label(control_frame, text=label_text, width=30, anchor='w').pack(side=tk.LEFT, padx=5)
+        
+        # Control
+        if control_type == 'Entry':
+            entry = ttk.Entry(control_frame, textvariable=self.vars[key], width=15)
+            entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        elif control_type == 'Checkbutton':
+            # Checkbuttons need a specific style to look good on dark background
+            ttk.Checkbutton(control_frame, variable=self.vars[key], text="", style='TCheckbutton').pack(side=tk.LEFT, padx=5)
+        elif control_type == 'Combobox':
+            combo = ttk.Combobox(control_frame, textvariable=self.vars[key], values=options, state='readonly', width=13)
+            combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+            
+        # Description (Accessibility feature)
+        if description:
+            ttk.Label(main_frame, text=description, wraplength=550, justify=tk.LEFT, font=('Segoe UI', 8, 'italic'), foreground='#aaaaaa').pack(fill=tk.X, padx=10, pady=(0, 5))
+
+    def start_move(self, event):
+        self._offsetx = event.x
+        self._offsety = event.y
+
+    def stop_move(self, event):
+        self._offsetx = 0
+        self._offsety = 0
+
+    def do_move(self, event):
+        x = self.root.winfo_x() + event.x - self._offsetx
+        y = self.root.winfo_y() + event.y - self._offsety
+        self.root.geometry(f"+{x}+{y}")
+
+    def save_and_hide(self):
+        """Saves the current settings and hides the widget."""
+        log_info("Attempting to save all settings...")
+        success_count = 0
+        error_count = 0
+        
+        for key, tk_var in self.vars.items():
+            try:
+                # 5. Refactor Save Logic: Get value and attempt to convert/validate
+                value = tk_var.get()
+                
+                # Tkinter BooleanVar returns 0/1, convert to Python bool
+                if isinstance(tk_var, tk.BooleanVar):
+                    value = bool(value)
+                
+                # Tkinter DoubleVar/IntVar returns float/int, which is fine.
+                
+                if config_manager.set(key, value):
+                    log_debug(f"Successfully set config key '{key}' to '{value}'")
+                    success_count += 1
+                else:
+                    error_count += 1
+                    log_error(f"Failed to set config key '{key}' with value '{value}' (Validation failed in config_manager)")
+                    
+            except Exception as e:
+                error_count += 1
+                log_error(f"Error processing setting '{key}' with value '{value}': {e}")
+        
+        log_info(f"Settings save complete: {success_count} successful, {error_count} failed.")
+        self.hide()
+
+    def show(self):
+        """Shows the widget and updates values."""
+        # Update all variables from config before showing
+        for key, tk_var in self.vars.items():
+            tk_var.set(config_manager.get(key))
+            
+        self.root.deiconify()
+        self.root.update()
+        self.is_visible = True
+
+    def hide(self):
+        """Hides the widget."""
+        self.root.withdraw()
+        self.is_visible = False
+
+# --- Status Widget (appears only during recording/transcribing)
 class RecordingWidget:
     def __init__(self):
         self.root = tk.Tk()
@@ -209,14 +387,16 @@ class RecordingWidget:
     def update_volume(self):
         """Update volume indicator"""
         if is_recording:
+            volume_threshold = config_manager.get('volume_threshold')
+            
             # Update volume bar
             bar_width = 60
             volume_width = int(min(current_volume * 1000, bar_width))
             
             # Color based on volume level
-            if current_volume > VOLUME_THRESHOLD * 3:
+            if current_volume > volume_threshold * 3:
                 color = '#2ecc71'  # Green - good volume
-            elif current_volume > VOLUME_THRESHOLD:
+            elif current_volume > volume_threshold:
                 color = '#f39c12'  # Orange - moderate
             else:
                 color = '#e74c3c'  # Red - too quiet
@@ -533,8 +713,9 @@ def audio_callback(indata, frames, time_info, status_flag):
             current_volume = np.sqrt(np.mean(indata**2))
             
             # Track silence for auto-stop
-            if SILENCE_TIMEOUT > 0:
-                if current_volume < VOLUME_THRESHOLD:
+            if config_manager.get('enable_silence_auto_stop'):
+                volume_threshold = config_manager.get('volume_threshold')
+                if current_volume < volume_threshold:
                     if last_silence_time == 0:
                         last_silence_time = time.time()
                 else:
@@ -544,6 +725,9 @@ def audio_callback(indata, frames, time_info, status_flag):
 
 def play_sound(sound_type):
     """Play enhanced audio feedback"""
+    if not config_manager.get('enable_audio_feedback'):
+        return
+        
     try:
         sounds = {
             'start': [(1000, 80), (1200, 80)],      # Rising beep-beep
@@ -580,7 +764,7 @@ def start_recording():
                 return
             
             # Check for fullscreen games
-            if IGNORE_FULLSCREEN_GAMES and is_fullscreen_game():
+            if config_manager.get('ignore_fullscreen_games') and is_fullscreen_game():
                 log_info("Ignoring auto-start - fullscreen game/app detected")
                 return
             
@@ -613,17 +797,21 @@ def start_recording():
         beep_thread.start()
         
         # Start auto-stop monitor (if silence auto-stop enabled or max time set)
-        if (ENABLE_SILENCE_AUTO_STOP and SILENCE_DURATION > 0) or SILENCE_TIMEOUT > 0 or MAX_RECORDING_TIME > 0:
+        silence_enabled = config_manager.get('enable_silence_auto_stop')
+        silence_duration = config_manager.get('silence_duration')
+        max_time = config_manager.get('max_recording_time')
+        
+        if (silence_enabled and silence_duration > 0) or max_time > 0:
             threading.Thread(target=auto_stop_monitor, daemon=True).start()
         
         status_widget.show_recording()
         
         # Build status message based on enabled stop methods
         stop_methods = []
-        if ENABLE_MANUAL_STOP:
+        if config_manager.get('enable_manual_stop'):
             stop_methods.append("Middle-click to stop")
-        if ENABLE_SILENCE_AUTO_STOP:
-            stop_methods.append(f"auto-stop after {SILENCE_DURATION}s silence")
+        if silence_enabled:
+            stop_methods.append(f"auto-stop after {silence_duration}s silence")
         
         stop_msg = ", ".join(stop_methods) if stop_methods else "Recording..."
         log_info(f"Recording started - {stop_msg}, Right-click to cancel")
@@ -641,28 +829,24 @@ def auto_stop_monitor():
     global auto_stopped
     
     try:
+        silence_enabled = config_manager.get('enable_silence_auto_stop')
+        silence_duration = config_manager.get('silence_duration')
+        max_time = config_manager.get('max_recording_time')
+        
         while is_recording:
             # Check configurable silence timeout
-            if ENABLE_SILENCE_AUTO_STOP and SILENCE_DURATION > 0 and last_silence_time > 0:
-                if time.time() - last_silence_time > SILENCE_DURATION:
-                    log_info(f"Auto-stopping after {SILENCE_DURATION}s of silence")
-                    auto_stopped = True
-                    stop_recording()
-                    break
-            
-            # Legacy SILENCE_TIMEOUT support (if ENABLE_SILENCE_AUTO_STOP is off)
-            if not ENABLE_SILENCE_AUTO_STOP and SILENCE_TIMEOUT > 0 and last_silence_time > 0:
-                if time.time() - last_silence_time > SILENCE_TIMEOUT:
-                    log_info(f"Auto-stopping after {SILENCE_TIMEOUT}s of silence")
+            if silence_enabled and silence_duration > 0 and last_silence_time > 0:
+                if time.time() - last_silence_time > silence_duration:
+                    log_info(f"Auto-stopping after {silence_duration}s of silence")
                     auto_stopped = True
                     stop_recording()
                     break
             
             # Check max recording time
-            if MAX_RECORDING_TIME > 0:
+            if max_time > 0:
                 duration = time.time() - recording_start_time
-                if duration >= MAX_RECORDING_TIME:
-                    log_info(f"Auto-stopping after {MAX_RECORDING_TIME}s max duration")
+                if duration >= max_time:
+                    log_info(f"Auto-stopping after {max_time}s max duration")
                     auto_stopped = True
                     stop_recording()
                     break
@@ -764,7 +948,6 @@ def transcribe_audio(frames):
             best_of=1,
             vad_filter=True,
             vad_parameters=dict(
-                threshold=0.4,
                 min_speech_duration_ms=500,
                 max_speech_duration_s=30,
                 min_silence_duration_ms=500,
@@ -894,7 +1077,7 @@ def focus_monitor():
     """Background thread: monitor foreground focus and auto-start recording when a text field is focused."""
     global focus_monitor_stop
     last_focused_hwnd = None
-    debounce_time = AUTO_START_DELAY
+    debounce_time = config_manager.get('auto_start_delay')
 
     try:
         while not focus_monitor_stop:
@@ -905,7 +1088,7 @@ def focus_monitor():
                     time.sleep(debounce_time)
                     if is_text_field():
                         log_debug("Focus monitor: text field focused")
-                        if AUTO_START_ON_FOCUS and not is_recording:
+                        if config_manager.get('auto_start_on_focus') and not is_recording:
                             start_recording()
                     last_focused_hwnd = hwnd
             except Exception as e:
@@ -937,6 +1120,48 @@ def save_to_history(text, duration, volume, word_count):
     except Exception as e:
         log_error(f"Failed to save history: {e}", e)
 
+def on_move(x, y):
+    """Mouse movement handler - checks for mouse shake to stop recording"""
+    global mouse_move_history
+    
+    if not is_recording:
+        return
+    
+    current_time = time.time() * 1000 # Convert to milliseconds
+    
+    shake_threshold = config_manager.get('mouse_shake_threshold_px')
+    shake_time_ms = config_manager.get('mouse_shake_time_ms')
+    
+    # 1. Add current position to history
+    mouse_move_history.append((x, y, current_time))
+    
+    # 2. Filter history to the last shake_time_ms
+    time_limit = current_time - shake_time_ms
+    
+    # Remove old entries
+    while mouse_move_history and mouse_move_history[0][2] < time_limit:
+        mouse_move_history.popleft()
+        
+    if len(mouse_move_history) < 2:
+        return
+        
+    # 3. Calculate total distance moved (Euclidean distance sum)
+    total_distance = 0
+    
+    # Start from the oldest point in the current window
+    x_start, y_start, _ = mouse_move_history[0]
+    
+    # Calculate total distance from start point to end point
+    x_end, y_end, _ = mouse_move_history[-1]
+    
+    # Calculate straight-line distance between start and end points
+    distance = ((x_end - x_start)**2 + (y_end - y_start)**2)**0.5
+    
+    # 4. Check for shake threshold
+    if distance > shake_threshold:
+        log_info(f"Mouse shake detected: {distance:.1f}px moved in {shake_time_ms}ms - stopping recording")
+        stop_recording()
+        
 def load_history():
     """Load transcription history from file"""
     try:
@@ -948,7 +1173,7 @@ def load_history():
         log_error(f"Failed to load history: {e}", e)
 
 def on_click(x, y, button, pressed):
-    """Mouse click handler - Middle mouse button to toggle, Right-click to cancel"""
+    """Mouse click handler - Any click stops recording, Right-click cancels, Middle-click toggles start/stop"""
     
     if not pressed:
         return
@@ -965,44 +1190,51 @@ def on_click(x, y, button, pressed):
     except Exception as e:
         log_debug(f"Widget check error: {e}")
     
-    # Middle mouse button - Toggle recording
-    if button == mouse.Button.middle:
-        if is_recording:
-            # Only allow manual stop if enabled
-            if ENABLE_MANUAL_STOP:
-                log_info("Middle-click detected - stopping recording")
-                stop_recording()
-            else:
-                log_debug("Middle-click ignored - manual stop disabled (waiting for auto-stop)")
-        else:
-            # Check if text field detection is required
-            if REQUIRE_TEXT_FIELD:
-                if is_text_field():
-                    log_info("Middle-click detected - starting recording")
-                    start_recording()
-                else:
-                    log_info("Middle-click ignored - not in text field")
-                    # Brief visual feedback
-                    status_widget.show_error("NOT IN TEXT FIELD")
-                    time.sleep(1)
-                    status_widget.hide()
-            else:
-                # Record anywhere - no text field check
-                log_info("Middle-click detected - starting recording (anywhere mode)")
-                start_recording()
-    # Left-click: optionally auto-start when clicking into a text field
-    elif button == mouse.Button.left and pressed:
-        # If already recording, ignore
-        if is_recording:
+    # --- Stop/Cancel Logic (Priority when recording) ---
+    if is_recording:
+        if button == mouse.Button.right:
+            log_info("Right-click detected - cancelling recording")
+            cancel_recording()
             return
-
+        
+        # Any other click stops transcription if manual stop is enabled
+        if config_manager.get('enable_manual_stop'):
+            log_info(f"Any click detected ({button}) - stopping recording")
+            stop_recording()
+            return
+        else:
+            log_debug(f"Click ignored ({button}) - manual stop disabled (waiting for auto-stop)")
+            return
+    
+    # --- Start Logic (Only when not recording) ---
+    
+    # Middle mouse button - Start recording
+    if button == mouse.Button.middle:
+        # Check if text field detection is required
+        if config_manager.get('require_text_field'):
+            if is_text_field():
+                log_info("Middle-click detected - starting recording")
+                start_recording()
+            else:
+                log_info("Middle-click ignored - not in text field")
+                # Brief visual feedback
+                status_widget.show_error("NOT IN TEXT FIELD")
+                time.sleep(1)
+                status_widget.hide()
+        else:
+            # Record anywhere - no text field check
+            log_info("Middle-click detected - starting recording (anywhere mode)")
+            start_recording()
+            
+    # Left-click: optionally auto-start when clicking into a text field
+    elif button == mouse.Button.left:
         # If left-click auto-start enabled, wait briefly for focus to settle then check
-        if AUTO_START_ON_LEFT_CLICK:
-            time.sleep(AUTO_START_DELAY)
-            if REQUIRE_TEXT_FIELD:
+        if config_manager.get('auto_start_on_left_click'):
+            time.sleep(config_manager.get('auto_start_delay'))
+            if config_manager.get('require_text_field'):
                 if is_text_field():
                     # Avoid password fields
-                    if IGNORE_PASSWORD_FIELDS:
+                    if config_manager.get('ignore_password_fields'):
                         # is_text_field already subtracts score for password fields; just check again conservatively
                         if is_text_field():
                             start_recording()
@@ -1012,14 +1244,8 @@ def on_click(x, y, button, pressed):
                     log_debug("Left-click did not land in text field")
             else:
                 start_recording()
-    
-    # Right-click during recording - Cancel
-    elif button == mouse.Button.right and is_recording:
-        log_info("Right-click detected - cancelling recording")
-        cancel_recording()
-
 def main():
-    global model, status_widget
+    global model, status_widget, settings_widget
     
     try:
         log_info("🎤 Voice Click - Advanced Edition")
@@ -1030,35 +1256,43 @@ def main():
         # Load history
         load_history()
         
-        # Create widget (hidden)
+        # Create widgets
         status_widget = RecordingWidget()
+        settings_widget = SettingsWidget()
+        
+        # Show settings widget on startup for initial configuration
+        settings_widget.show()
         
         # Load model with auto-fallback to CPU
-        log_info(f"Loading Whisper model ({WHISPER_MODEL}) on {WHISPER_DEVICE.upper()}...")
+        whisper_model = config_manager.get('whisper_model')
+        whisper_device = config_manager.get('whisper_device')
+        whisper_compute_type = config_manager.get('whisper_compute_type')
+        
+        log_info(f"Loading Whisper model ({whisper_model}) on {whisper_device.upper()}...")
         model_loaded = False
         
         # Try primary configuration (CUDA)
         try:
             model = WhisperModel(
-                WHISPER_MODEL, 
-                device=WHISPER_DEVICE, 
-                compute_type=WHISPER_COMPUTE_TYPE
+                whisper_model,
+                device=whisper_device,
+                compute_type=whisper_compute_type
             )
-            log_info(f"✓ Model ready! ({WHISPER_MODEL} / {WHISPER_DEVICE} / {WHISPER_COMPUTE_TYPE})")
+            log_info(f"✓ Model ready! ({whisper_model} / {whisper_device} / {whisper_compute_type})")
             model_loaded = True
         except Exception as e:
-            log_error(f"✗ Failed to load model on {WHISPER_DEVICE}: {e}", e)
+            log_error(f"✗ Failed to load model on {whisper_device}: {e}", e)
             
             # Auto-fallback to CPU if CUDA was selected
-            if WHISPER_DEVICE == "cuda":
+            if whisper_device == "cuda":
                 log_info("Attempting fallback to CPU...")
                 try:
                     model = WhisperModel(
-                        WHISPER_MODEL, 
-                        device="cpu", 
+                        whisper_model,
+                        device="cpu",
                         compute_type="int8"
                     )
-                    log_info(f"✓ Model ready on CPU! ({WHISPER_MODEL} / cpu / int8)")
+                    log_info(f"✓ Model ready on CPU! ({whisper_model} / cpu / int8)")
                     log_info("Note: CPU mode is slower but works. To use GPU, install cuDNN libraries.")
                     model_loaded = True
                 except Exception as e2:
@@ -1079,69 +1313,79 @@ def main():
         log_info("✓ Audio ready")
         
         # Start mouse listener
-        listener = mouse.Listener(on_click=on_click)
+        listener = mouse.Listener(on_click=on_click, on_move=on_move)
         listener.start()
         log_info("✓ Mouse ready")
 
         # Start focus monitor thread if enabled
         global focus_monitor_thread, focus_monitor_stop
-        if AUTO_START_ON_FOCUS:
+        if config_manager.get('auto_start_on_focus'):
             focus_monitor_stop = False
             focus_monitor_thread = threading.Thread(target=focus_monitor, daemon=True)
             focus_monitor_thread.start()
             log_info("✓ Focus monitor active")
+            
+        # Register settings hotkey (Ctrl+Alt+S)
+        keyboard.add_hotkey('ctrl+alt+s', toggle_settings_widget)
+        log_info("✓ Settings hotkey (Ctrl+Alt+S) registered")
         
         log_info("")
         log_info("ADVANCED FEATURES:")
-        log_info(f"  • Whisper Model: {WHISPER_MODEL} on {WHISPER_DEVICE.upper()} ({WHISPER_COMPUTE_TYPE})")
+        log_info(f"  • Whisper Model: {whisper_model} on {whisper_device.upper()} ({whisper_compute_type})")
         log_info(f"  • Volume monitoring with real-time feedback")
         
         # Auto-stop info
-        if ENABLE_SILENCE_AUTO_STOP:
-            log_info(f"  • Auto-stop after {SILENCE_DURATION}s of silence")
-        if ENABLE_MANUAL_STOP:
+        silence_enabled = config_manager.get('enable_silence_auto_stop')
+        silence_duration = config_manager.get('silence_duration')
+        manual_stop_enabled = config_manager.get('enable_manual_stop')
+        max_time = config_manager.get('max_recording_time')
+        
+        if silence_enabled:
+            log_info(f"  • Auto-stop after {silence_duration}s of silence")
+        if manual_stop_enabled:
             log_info(f"  • Manual stop: Middle-click")
-        if not ENABLE_SILENCE_AUTO_STOP and not ENABLE_MANUAL_STOP:
+        if not silence_enabled and not manual_stop_enabled:
             log_info(f"  • Auto-stop disabled (max time only)")
         
-        log_info(f"  • Max recording time: {MAX_RECORDING_TIME}s")
+        log_info(f"  • Max recording time: {max_time}s")
         log_info(f"  • Transcription history: {len(transcription_history)} entries")
         log_info(f"  • History saved to: {HISTORY_FILE}")
         
         # Auto-start info
-        if AUTO_START_ON_FOCUS:
+        if config_manager.get('auto_start_on_focus'):
             log_info(f"  • Auto-start on focus enabled")
-        if AUTO_START_ON_LEFT_CLICK:
+        if config_manager.get('auto_start_on_left_click'):
             log_info(f"  • Auto-start on left-click enabled")
-        if IGNORE_FULLSCREEN_GAMES:
+        if config_manager.get('ignore_fullscreen_games'):
             log_info(f"  • Fullscreen games ignored")
-        if IGNORE_PASSWORD_FIELDS:
+        if config_manager.get('ignore_password_fields'):
             log_info(f"  • Password fields ignored")
         
         log_info("")
         log_info("USAGE:")
         
         start_methods = []
-        if AUTO_START_ON_FOCUS:
+        if config_manager.get('auto_start_on_focus'):
             start_methods.append("Focus a text field")
-        if AUTO_START_ON_LEFT_CLICK:
+        if config_manager.get('auto_start_on_left_click'):
             start_methods.append("Left-click into a text field")
         start_methods.append("Middle-click")
         
         log_info(f"  • Start recording: {' / '.join(start_methods)}")
         
         stop_methods = []
-        if ENABLE_MANUAL_STOP:
+        if manual_stop_enabled:
             stop_methods.append("Middle-click")
-        if ENABLE_SILENCE_AUTO_STOP:
-            stop_methods.append(f"Silence for {SILENCE_DURATION}s")
+        if silence_enabled:
+            stop_methods.append(f"Silence for {silence_duration}s")
         
         if stop_methods:
             log_info(f"  • Stop recording: {' / '.join(stop_methods)}")
         
         log_info("  • Cancel recording → Right-click during recording")
+        log_info("  • Open Settings Widget → Ctrl+Alt+S")
         
-        if REQUIRE_TEXT_FIELD:
+        if config_manager.get('require_text_field'):
             log_info("  • Requires text field to start recording")
         else:
             log_info("  • Works ANYWHERE - no text field required")
