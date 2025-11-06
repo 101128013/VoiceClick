@@ -1,220 +1,167 @@
 """
-VoiceClick Settings Management - Application configuration persistence
-Handles loading, saving, and managing all application settings
+Manages application settings, providing a structured and persistent way to
+handle user configurations.
+
+This module defines the `Settings` data class, which holds all user-configurable
+options. It also includes the `SettingsManager` to load, save, and validate
+these settings from a JSON file.
 """
 
 import json
 import logging
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
-from typing import Optional
+from typing import Optional, List
+
+from . import constants
 
 logger = logging.getLogger(__name__)
 
-
 @dataclass
 class Settings:
-    """Application settings with defaults."""
+    """
+    A data class holding all application settings with their default values.
+    
+    This class is designed to be easily serialized to and from JSON.
+    """
     
     # Model Settings
-    whisper_model: str = "large-v3"
-    whisper_device: str = "cuda"
+    whisper_model: str = constants.WHISPER_DEFAULT_MODEL
+    whisper_device: str = constants.DEFAULT_DEVICE
     whisper_compute_type: str = "float16"
+    language: str = "en"  # 'auto' for auto-detection
     
     # Recording Settings
-    auto_start_on_focus: bool = True
-    auto_start_on_left_click: bool = True
-    enable_silence_auto_stop: bool = True
-    silence_duration: float = 8.0
+    auto_start_on_focus: bool = constants.DEFAULT_AUTO_START_FOCUS
+    auto_start_on_left_click: bool = constants.DEFAULT_AUTO_START_LEFT_CLICK
+    enable_silence_auto_stop: bool = constants.DEFAULT_ENABLE_SILENCE_AUTO_STOP
+    silence_duration: float = constants.DEFAULT_SILENCE_DURATION
     enable_manual_stop: bool = True
-    max_recording_time: int = 300
+    max_recording_time: int = constants.DEFAULT_MAX_RECORDING_TIME
+    microphone_device: Optional[int] = None  # None = default device
+    
+    # Auto-Start Settings
+    auto_start_cooldown: float = 2.0  # Seconds between auto-starts
+    app_whitelist: List[str] = field(default_factory=list)  # Empty = all apps allowed
+    app_blacklist: List[str] = field(default_factory=list)  # Empty = no apps blocked
     
     # UI Settings
     start_minimized: bool = False
     show_notification_on_transcription: bool = True
-    window_width: int = 800
-    window_height: int = 600
+    window_width: int = constants.DEFAULT_WINDOW_WIDTH
+    window_height: int = constants.DEFAULT_WINDOW_HEIGHT
     
-    # Accessibility
-    ignore_password_fields: bool = True
-    ignore_fullscreen_games: bool = True
+    # History Settings
+    history_size: int = constants.DEFAULT_HISTORY_SIZE
     
-    # Advanced
+    # Hotkey Settings
+    enable_hotkeys: bool = constants.DEFAULT_ENABLE_HOTKEYS
+    start_recording_hotkey: str = constants.DEFAULT_START_RECORDING_HOTKEY
+    stop_recording_hotkey: str = constants.DEFAULT_STOP_RECORDING_HOTKEY
+    
+    # Advanced Settings
     debug_mode: bool = False
-    history_size: int = 50
-    language: str = "en"
-    
-    # Internal paths
-    _config_dir: Path = field(default_factory=lambda: Path.home() / ".voice_click")
-    _config_file: Path = field(default_factory=lambda: Path.home() / ".voice_click" / "config.json")
-    
-    @property
-    def config_file(self) -> Path:
-        """Get config file path."""
-        return self._config_file
-    
-    @property
-    def config_dir(self) -> Path:
-        """Get config directory path."""
-        return self._config_dir
-
-    def validate(self) -> bool:
-        """
-        Validate settings values.
-        
-        Returns:
-            bool: True if all settings valid
-        """
-        # Validate model
-        valid_models = ["tiny", "base", "small", "medium", "large-v2", "large-v3"]
-        if self.whisper_model not in valid_models:
-            logger.warning(f"Invalid model: {self.whisper_model}, using default")
-            self.whisper_model = "large-v3"
-        
-        # Validate device
-        valid_devices = ["cuda", "cpu", "auto"]
-        if self.whisper_device not in valid_devices:
-            logger.warning(f"Invalid device: {self.whisper_device}, using default")
-            self.whisper_device = "cuda"
-        
-        # Validate compute type
-        valid_types = ["auto", "float16", "float32", "int8"]
-        if self.whisper_compute_type not in valid_types:
-            logger.warning(f"Invalid compute type: {self.whisper_compute_type}, using default")
-            self.whisper_compute_type = "float16"
-        
-        # Validate numeric ranges
-        if self.silence_duration < 1.0:
-            self.silence_duration = 1.0
-        if self.silence_duration > 60.0:
-            self.silence_duration = 60.0
-        
-        if self.max_recording_time < 10:
-            self.max_recording_time = 10
-        if self.max_recording_time > 3600:
-            self.max_recording_time = 3600
-        
-        if self.history_size < 10:
-            self.history_size = 10
-        if self.history_size > 1000:
-            self.history_size = 1000
-        
-        if self.window_width < 400:
-            self.window_width = 400
-        if self.window_height < 300:
-            self.window_height = 300
-        
-        return True
-
-    def save(self) -> bool:
-        """
-        Save settings to JSON file.
-        
-        Returns:
-            bool: True if successful
-        """
-        try:
-            # Validate before saving
-            self.validate()
-            
-            # Create config directory if it doesn't exist
-            self.config_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Prepare data for serialization (exclude Path objects)
-            settings_dict = asdict(self)
-            # Remove internal path fields
-            del settings_dict['_config_dir']
-            del settings_dict['_config_file']
-            
-            # Write to JSON
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(settings_dict, f, indent=2, ensure_ascii=False)
-            
-            logger.info(f"Settings saved to {self.config_file}")
-            return True
-        
-        except Exception as e:
-            logger.error(f"Failed to save settings: {e}")
-            return False
-
-    @classmethod
-    def load(cls, config_file: Optional[Path] = None) -> "Settings":
-        """
-        Load settings from JSON file, fall back to defaults if not found.
-        
-        Args:
-            config_file: Optional custom config file path
-            
-        Returns:
-            Settings: Loaded settings or defaults
-        """
-        if config_file is None:
-            config_file = Path.home() / ".voice_click" / "config.json"
-        
-        try:
-            if config_file.exists():
-                with open(config_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                
-                # Create settings instance with loaded data
-                settings = cls(**{k: v for k, v in data.items() if k not in ['_config_dir', '_config_file']})
-                settings._config_file = config_file
-                settings._config_dir = config_file.parent
-                
-                # Validate loaded settings
-                settings.validate()
-                
-                logger.info(f"Settings loaded from {config_file}")
-                return settings
-            else:
-                logger.info("No config file found, using default settings")
-                settings = cls()
-                settings._config_file = config_file
-                settings._config_dir = config_file.parent
-                return settings
-        
-        except Exception as e:
-            logger.error(f"Failed to load settings: {e}, using defaults")
-            settings = cls()
-            settings._config_file = config_file
-            settings._config_dir = config_file.parent
-            return settings
-
-    def reset_to_defaults(self) -> bool:
-        """
-        Reset all settings to defaults.
-        
-        Returns:
-            bool: True if successful
-        """
-        try:
-            default_settings = Settings()
-            
-            # Copy all fields from default
-            for field_name in asdict(default_settings):
-                if not field_name.startswith('_'):
-                    setattr(self, field_name, getattr(default_settings, field_name))
-            
-            logger.info("Settings reset to defaults")
-            return True
-        
-        except Exception as e:
-            logger.error(f"Failed to reset settings: {e}")
-            return False
 
     def to_dict(self) -> dict:
-        """
-        Convert settings to dictionary (excluding internal fields).
-        
-        Returns:
-            dict: Settings dictionary
-        """
-        settings_dict = asdict(self)
-        del settings_dict['_config_dir']
-        del settings_dict['_config_file']
-        return settings_dict
+        """Converts the settings object to a dictionary."""
+        return asdict(self)
 
-    def __str__(self) -> str:
-        """Return string representation of settings."""
-        data = self.to_dict()
-        return json.dumps(data, indent=2)
+
+class SettingsManager:
+    """
+    Handles loading, saving, and validating application settings.
+    
+    This manager ensures that settings are persisted across sessions and that
+    their values remain within valid ranges.
+    """
+
+    def __init__(self, config_dir: Optional[Path] = None):
+        """
+        Initializes the SettingsManager.
+
+        Args:
+            config_dir: The directory to store configuration files. Defaults to
+                        `~/.voice_click`.
+        """
+        self.config_dir = config_dir or Path.home() / ".voice_click"
+        self.config_file = self.config_dir / constants.CONFIG_FILENAME
+        self.settings = Settings()
+        self.load()
+
+    def load(self) -> Settings:
+        """
+        Loads settings from the JSON configuration file.
+        
+        If the file doesn't exist or is invalid, it returns default settings.
+        """
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        if not self.config_file.exists():
+            logger.info("Configuration file not found. Using default settings.")
+            self.save()  # Create a default config file
+            return self.settings
+
+        try:
+            with open(self.config_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Update settings with loaded data, ignoring unknown keys
+            loaded_settings = Settings(**{k: v for k, v in data.items() if hasattr(Settings, k)})
+            self.settings = loaded_settings
+            logger.info("Settings loaded successfully.")
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.error(f"Failed to load or parse settings file: {e}. Using defaults.", exc_info=True)
+            self.settings = Settings() # Reset to defaults on error
+        
+        self.validate()
+        return self.settings
+
+    def save(self):
+        """
+        Saves the current settings to the JSON configuration file.
+        """
+        self.validate()
+        try:
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(self.settings.to_dict(), f, indent=4)
+            logger.info(f"Settings saved to {self.config_file}")
+        except IOError as e:
+            logger.error(f"Failed to save settings: {e}", exc_info=True)
+
+    def validate(self):
+        """
+        Ensures that all settings have valid and reasonable values.
+        
+        This method corrects any out-of-range values to prevent application errors.
+        """
+        # Validate model
+        if self.settings.whisper_model not in constants.WHISPER_MODELS:
+            logger.warning(f"Invalid model '{self.settings.whisper_model}', resetting to default.")
+            self.settings.whisper_model = constants.WHISPER_DEFAULT_MODEL
+        
+        # Validate device
+        if self.settings.whisper_device not in constants.COMPUTE_DEVICES:
+            logger.warning(f"Invalid device '{self.settings.whisper_device}', resetting to default.")
+            self.settings.whisper_device = constants.DEFAULT_DEVICE
+        
+        # Validate compute type
+        if self.settings.whisper_compute_type not in constants.COMPUTE_TYPES:
+            logger.warning(f"Invalid compute type '{self.settings.whisper_compute_type}', resetting to 'auto'.")
+            self.settings.whisper_compute_type = "auto"
+        
+        # Validate numeric ranges
+        self.settings.silence_duration = max(1.0, min(self.settings.silence_duration, 60.0))
+        self.settings.max_recording_time = max(10, min(self.settings.max_recording_time, 3600))
+        self.settings.history_size = max(10, min(self.settings.history_size, 1000))
+
+    def get_settings(self) -> Settings:
+        """Returns the current settings object."""
+        return self.settings
+
+    def update_settings(self, new_settings: dict):
+        """
+        Updates the settings with new values and saves them.
+        """
+        for key, value in new_settings.items():
+            if hasattr(self.settings, key):
+                setattr(self.settings, key, value)
+        self.save()

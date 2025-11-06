@@ -1,257 +1,262 @@
 """
-VoiceClick Core Engine - Main transcription and recording engine
-Handles audio capture, Whisper transcription, and text field detection
+Core transcription and recording engine for VoiceClick.
+
+This module handles audio capture, processing, and transcription using the
+Whisper model. It is designed to be run in a separate thread to avoid
+blocking the main UI.
 """
 
 import logging
 import threading
 import time
 import queue
-from typing import Optional, Dict, Callable
-from pathlib import Path
+from typing import Optional, Callable
 
 import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
 
-from ..config.settings import Settings
-
+from src.config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
-
 class VoiceClickEngine:
     """
-    Core transcription engine - encapsulates all voice-to-text logic.
-    Handles Whisper model loading, audio recording, and transcription.
+    The core engine for voice-to-text transcription.
+
+    This class encapsulates all the logic for audio recording, silence detection,
+    and transcription using the `faster-whisper` library. It is designed to be
+    thread-safe and provides callbacks for UI updates.
     """
 
     def __init__(self, config: Settings):
         """
-        Initialize the VoiceClick Engine.
-        
+        Initializes the VoiceClick Engine.
+
         Args:
-            config: Settings object containing model and recording parameters
+            config: A Settings object containing model and recording parameters.
         """
         self.config = config
-        self.model = None
+        self.model: Optional[WhisperModel] = None
         self.is_recording = False
         self.is_initialized = False
-        
+
         # Audio recording state
-        self.stream = None
-        self.audio_queue = queue.Queue()
-        self.audio_data = []
-        self.recording_start_time = None
-        
+        self.stream: Optional[sd.InputStream] = None
+        self.audio_data: list[np.ndarray] = []
+        self.recording_start_time: Optional[float] = None
+
         # Status tracking
-        self.current_volume = 0
-        self.current_rms = 0
-        self.silence_start_time = None
-        
+        self.current_rms = 0.0
+        self.silence_start_time: Optional[float] = None
+
         # Threading
-        self.recording_thread = None
+        self.recording_thread: Optional[threading.Thread] = None
         self.stop_event = threading.Event()
         self.model_lock = threading.Lock()
-        
-        # Callbacks
-        self.on_volume_change = None
-        self.on_status_change = None
-        
-        logger.info(f"VoiceClickEngine initialized with model: {config.whisper_model}")
+
+        # Callbacks for UI updates
+        self.on_volume_change: Optional[Callable[[int], None]] = None
+        self.on_status_change: Optional[Callable[[str], None]] = None
+
+        logger.info(f"VoiceClickEngine initialized with model '{config.whisper_model}'")
 
     def initialize(self) -> bool:
         """
-        Load Whisper model asynchronously - this can take a few seconds on first run.
-        Should be called before start_recording.
-        
+        Loads the Whisper model. This can be time-consuming and should be
+        called before starting any recording.
+
         Returns:
-            bool: True if model loaded successfully, False otherwise
+            True if the model was loaded successfully, False otherwise.
         """
-        if self.model is not None:
+        if self.is_initialized:
             return True
-        
-        try:
-            with self.model_lock:
+
+        with self.model_lock:
+            if self.model is not None:
+                self.is_initialized = True
+                return True
+            try:
                 logger.info(
-                    f"Loading {self.config.whisper_model} model "
-                    f"on device: {self.config.whisper_device}"
+                    f"Loading Whisper model '{self.config.whisper_model}' on "
+                    f"device '{self.config.whisper_device}' with compute type "
+                    f"'{self.config.whisper_compute_type}'..."
                 )
-                
                 self.model = WhisperModel(
                     self.config.whisper_model,
                     device=self.config.whisper_device,
                     compute_type=self.config.whisper_compute_type,
-                    num_workers=4
                 )
-                
                 self.is_initialized = True
-                logger.info("Model loaded successfully")
+                logger.info("Whisper model loaded successfully.")
+                if self.on_status_change:
+                    self.on_status_change("Model loaded, ready to transcribe.")
                 return True
-                
-        except Exception as e:
-            logger.error(f"Failed to load Whisper model: {e}")
-            return False
+            except Exception as e:
+                logger.exception(f"Failed to load Whisper model: {e}")
+                if self.on_status_change:
+                    self.on_status_change(f"Error: Failed to load model. {e}")
+                return False
 
     def start_recording(self) -> bool:
         """
-        Start audio capture from the default microphone.
-        
+        Starts capturing audio from the default microphone in a background thread.
+
         Returns:
-            bool: True if recording started successfully
+            True if recording started successfully, False otherwise.
         """
         if self.is_recording:
-            logger.warning("Recording is already in progress")
+            logger.warning("Recording is already in progress.")
             return False
-        
+
         if not self.is_initialized:
             logger.error("Engine not initialized. Call initialize() first.")
+            if self.on_status_change:
+                self.on_status_change("Error: Engine not initialized.")
             return False
-        
+
         try:
             self.is_recording = True
             self.audio_data = []
             self.recording_start_time = time.time()
-            self.silence_start_time = time.time()
+            self.silence_start_time = None
             self.stop_event.clear()
-            
-            # Start recording thread
+
             self.recording_thread = threading.Thread(target=self._record_audio, daemon=True)
             self.recording_thread.start()
-            
-            logger.info("Recording started")
+
+            logger.info("Recording started.")
+            if self.on_status_change:
+                self.on_status_change("Recording...")
             return True
-            
         except Exception as e:
-            logger.error(f"Failed to start recording: {e}")
+            logger.exception(f"Failed to start recording: {e}")
             self.is_recording = False
+            if self.on_status_change:
+                self.on_status_change(f"Error: Could not start recording. {e}")
             return False
 
     def stop_recording(self) -> Optional[str]:
         """
-        Stop recording and return the transcribed text.
-        
+        Stops the recording, transcribes the captured audio, and returns the text.
+
         Returns:
-            str: Transcribed text, or None if transcription failed
+            The transcribed text as a string, or None if transcription failed or
+            no audio was recorded.
         """
         if not self.is_recording:
-            logger.warning("No recording in progress")
+            logger.warning("No recording in progress to stop.")
             return None
+
+        self.stop_event.set()
+        if self.recording_thread and self.recording_thread.is_alive():
+            self.recording_thread.join(timeout=2)
+
+        self.is_recording = False
+        if self.on_status_change:
+            self.on_status_change("Processing audio...")
+
+        if not self.audio_data:
+            logger.warning("No audio data was recorded.")
+            if self.on_status_change:
+                self.on_status_change("Ready.")
+            return None
+
+        audio_array = np.concatenate(self.audio_data, axis=0).astype(np.float32)
         
-        try:
-            self.stop_event.set()
-            
-            # Wait for recording thread to finish
-            if self.recording_thread and self.recording_thread.is_alive():
-                self.recording_thread.join(timeout=5)
-            
-            # Close the stream
-            if self.stream:
-                self.stream.stop()
-                self.stream.close()
-                self.stream = None
-            
-            self.is_recording = False
-            
-            if len(self.audio_data) == 0:
-                logger.warning("No audio data recorded")
-                return None
-            
-            # Convert audio to numpy array
-            audio_array = np.concatenate(self.audio_data, axis=0).astype(np.float32)
-            
-            # Normalize audio to [-1, 1] range
-            audio_array = audio_array / np.max(np.abs(audio_array)) if np.max(np.abs(audio_array)) > 0 else audio_array
-            
-            logger.info(f"Transcribing audio ({len(audio_array)} samples)")
-            
-            # Transcribe with Whisper
-            result = self._transcribe_audio(audio_array)
-            
-            logger.info(f"Transcription complete: {result}")
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error during stop_recording: {e}")
-            self.is_recording = False
-            return None
+        # Normalize audio to the range [-1, 1]
+        max_abs = np.max(np.abs(audio_array))
+        if max_abs > 0:
+            audio_array = audio_array / max_abs
+
+        logger.info(f"Transcribing {len(audio_array) / 16000:.2f} seconds of audio.")
+        result = self._transcribe_audio(audio_array)
+        logger.info(f"Transcription result: '{result}'")
+
+        if self.on_status_change:
+            self.on_status_change("Ready.")
+        
+        return result
 
     def _record_audio(self):
         """
-        Internal method: Record audio in background thread.
+        The main audio recording loop, run in a background thread.
+        
+        Captures audio from the microphone and puts it into a queue. Also handles
+        auto-stop logic for silence and maximum recording time.
         """
         try:
-            # Audio configuration
-            sample_rate = 16000  # Whisper default
+            sample_rate = 16000  # Whisper's required sample rate
             channels = 1
-            blocksize = 4096
-            
+            blocksize = 4096  # 256ms of audio per block
+
             def audio_callback(indata, frames, time_info, status):
                 if status:
                     logger.warning(f"Audio callback status: {status}")
-                
-                # Store audio chunk
                 self.audio_data.append(indata.copy())
-                
-                # Update volume/RMS
                 self._update_volume(indata)
-            
-            # Open audio stream
+
             self.stream = sd.InputStream(
                 samplerate=sample_rate,
                 channels=channels,
                 blocksize=blocksize,
                 callback=audio_callback,
-                dtype=np.float32
+                dtype=np.float32,
+                device=self.config.microphone_device,
             )
-            
             with self.stream:
-                # Record until stop_event is set or max time reached
                 while not self.stop_event.is_set():
-                    # Check max recording time
-                    if self.config.enable_manual_stop:
-                        elapsed = time.time() - self.recording_start_time
-                        if elapsed > self.config.max_recording_time:
-                            logger.info(f"Max recording time reached ({elapsed:.1f}s)")
-                            self.stop_event.set()
-                    
-                    # Check for silence auto-stop
-                    if self.config.enable_silence_auto_stop:
-                        if self._check_silence():
-                            logger.info("Silence detected, stopping recording")
-                            self.stop_event.set()
-                    
+                    self._check_recording_limits()
                     time.sleep(0.1)
-        
         except Exception as e:
-            logger.error(f"Error in _record_audio: {e}")
+            logger.exception(f"Error in audio recording thread: {e}")
+            if self.on_status_change:
+                self.on_status_change(f"Error: Audio recording failed. {e}")
+        finally:
+            if self.stream:
+                self.stream.close()
+                self.stream = None
             self.stop_event.set()
 
     def _update_volume(self, audio_chunk: np.ndarray):
         """
-        Update current volume/RMS level for UI display.
-        
-        Args:
-            audio_chunk: Audio data chunk
+        Calculates the root mean square (RMS) of the audio chunk to estimate volume
+        and triggers the on_volume_change callback.
         """
-        rms = np.sqrt(np.mean(audio_chunk ** 2))
-        self.current_rms = rms
+        self.current_rms = np.sqrt(np.mean(audio_chunk**2))
         
-        # Convert to dB scale for display (0-100)
-        self.current_volume = min(100, int(20 * np.log10(max(rms, 1e-10)) + 100))
-        
-        # Call volume callback if set
-        if self.on_volume_change:
-            self.on_volume_change(self.current_volume)
+        # Convert RMS to a more intuitive 0-100 scale.
+        # The formula is a logarithmic conversion to decibels, adjusted to the scale.
+        volume_db = 20 * np.log10(self.current_rms + 1e-10)
+        # Clamp and scale to 0-100 range
+        scaled_volume = int(np.clip((volume_db + 60) * 2, 0, 100))
 
-    def _check_silence(self) -> bool:
+        if self.on_volume_change:
+            self.on_volume_change(scaled_volume)
+
+    def _check_recording_limits(self):
+        """Checks for silence or max recording time to auto-stop recording."""
+        if self.config.enable_silence_auto_stop and self._is_silent():
+            logger.info("Silence detected, stopping recording.")
+            self.stop_event.set()
+
+        if self.config.enable_manual_stop and self.recording_start_time:
+            elapsed = time.time() - self.recording_start_time
+            if elapsed > self.config.max_recording_time:
+                logger.info(f"Max recording time of {self.config.max_recording_time}s reached.")
+                self.stop_event.set()
+
+    def _is_silent(self) -> bool:
         """
-        Check if recording has been silent long enough to auto-stop.
-        
+        Determines if the audio has been silent for longer than the configured duration.
+
         Returns:
-            bool: True if silence threshold exceeded
+            True if the silence duration has been exceeded, False otherwise.
         """
-        if self.current_rms < 0.01:  # Silence threshold
+        # A reasonable threshold for silence
+        silence_threshold = 0.01
+
+        if self.current_rms < silence_threshold:
             if self.silence_start_time is None:
                 self.silence_start_time = time.time()
             
@@ -265,36 +270,35 @@ class VoiceClickEngine:
 
     def _transcribe_audio(self, audio: np.ndarray) -> Optional[str]:
         """
-        Transcribe audio using Whisper model.
-        
+        Transcribes an audio array using the loaded Whisper model.
+
         Args:
-            audio: Audio numpy array
-            
+            audio: A NumPy array containing the audio data.
+
         Returns:
-            str: Transcribed text
+            The transcribed text as a string, or None on error.
         """
+        if not self.is_initialized or self.model is None:
+            logger.error("Transcription attempted before model was initialized.")
+            return None
+        
         try:
             with self.model_lock:
                 segments, info = self.model.transcribe(
                     audio,
-                    language=None,  # Auto-detect language
-                    beam_size=5
+                    language=self.config.language if self.config.language != "auto" else None,
+                    beam_size=5,
                 )
                 
-                # Combine all segments
-                text = " ".join([segment.text for segment in segments]).strip()
+                text = " ".join(segment.text for segment in segments).strip()
                 return text if text else None
-        
         except Exception as e:
-            logger.error(f"Transcription error: {e}")
+            logger.exception(f"Transcription failed: {e}")
             return None
 
-    def get_status(self) -> Dict:
+    def get_status(self) -> dict:
         """
-        Get current engine status for UI updates.
-        
-        Returns:
-            dict: Status information
+        Returns a dictionary with the current status of the engine.
         """
         elapsed = 0
         if self.is_recording and self.recording_start_time:
@@ -303,22 +307,7 @@ class VoiceClickEngine:
         return {
             "is_recording": self.is_recording,
             "is_initialized": self.is_initialized,
-            "current_volume": self.current_volume,
-            "recording_duration": elapsed,
-            "model_loaded": self.model is not None,
-            "current_model": self.config.whisper_model,
-            "current_device": self.config.whisper_device,
+            "model_name": self.config.whisper_model,
+            "device": self.config.whisper_device,
+            "recording_time": elapsed,
         }
-
-    def shutdown(self):
-        """
-        Gracefully shutdown the engine and release resources.
-        """
-        if self.is_recording:
-            self.stop_recording()
-        
-        if self.stream:
-            self.stream.stop()
-            self.stream.close()
-        
-        logger.info("VoiceClickEngine shutdown complete")

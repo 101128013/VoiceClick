@@ -44,8 +44,9 @@ class TestVoiceClickEngine:
         
         assert status['is_recording'] == False
         assert status['is_initialized'] == False
-        assert status['model_loaded'] == False
-        assert status['current_volume'] == 0
+        assert status['model_name'] == settings.whisper_model
+        assert status['device'] == settings.whisper_device
+        assert status['recording_time'] == 0
     
     def test_start_recording_not_initialized(self):
         """Test starting recording when not initialized fails"""
@@ -85,15 +86,6 @@ class TestVoiceClickEngine:
         assert engine.is_initialized == True
         assert engine.model is not None
     
-    def test_shutdown(self):
-        """Test engine shutdown"""
-        settings = Settings()
-        engine = VoiceClickEngine(settings)
-        
-        # Should not raise exception
-        engine.shutdown()
-        
-        assert engine.is_recording == False
 
 
 class TestEngineThreadSafety:

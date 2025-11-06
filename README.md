@@ -1,84 +1,72 @@
-# VoiceClick - Professional Voice-to-Text Application
+# VoiceClick
 
-VoiceClick is an advanced Windows 11 application that enables users to transcribe speech to text in real-time using OpenAI's Whisper model with GPU acceleration.
+**VoiceClick** is a modern, open-source voice-to-text application for Windows that allows you to transcribe your speech directly into any text field with a simple click. It's built with Python and leverages the power of OpenAI's Whisper for high-quality, real-time transcription.
+
+![VoiceClick Screenshot](docs/screenshot.png) <!--- Placeholder for a screenshot -->
 
 ## Features
 
-- **Advanced ML Integration**: Uses OpenAI Whisper large-v3 model with GPU acceleration
-- **Smart Detection**: Multi-method text field detection (cursor type, class names, window focus)
-- **Accessibility Features**: Auto-start on focus, left-click, middle-click toggle
-- **Robust Error Handling**: Comprehensive logging, fallback methods for text insertion
-- **Performance Monitoring**: Real-time volume monitoring with visual feedback
-- **Data Persistence**: Transcription history with JSON storage
-- **Modern UI**: Native Windows 11 PyQt6 interface with system tray integration
+- **High-Quality Transcription**: Utilizes `faster-whisper`, a highly optimized version of OpenAI's Whisper model, for fast and accurate transcriptions.
+- **System-Wide Integration**: Transcribe into any application or text field on Windows.
+- **Customizable Models**: Choose from various Whisper model sizes (`tiny`, `base`, `small`, `medium`, `large`) to balance speed and accuracy.
+- **Hardware Acceleration**: Supports CUDA for GPU-accelerated transcription, with a fallback to CPU.
+- **Silence Detection**: Automatically stops recording after a configurable period of silence.
+- **User-Friendly Interface**: A clean, tabbed interface built with PyQt6 to manage settings, view status, and browse transcription history.
+- **System Tray Access**: Runs discreetly in the system tray for easy access.
+- **Transcription History**: Stores your recent transcriptions for easy review and export.
 
-## Quick Start
+## Installation
 
-```bash
-# Install dependencies
-pip install -r requirements.txt
+### Prerequisites
 
-# Run the progress monitor (optional)
-python monitor.py
+- Windows 10 or 11
+- Python 3.9+
+- [NVIDIA GPU with CUDA support](https://developer.nvidia.com/cuda-gpus) (recommended for best performance)
+- [Git](https://git-scm.com/downloads)
 
-# Start development
-python app.py
-```
+### Steps
 
-## Project Status
+1.  **Clone the Repository**:
+    ```bash
+    git clone https://github.com/your-username/VoiceClick.git
+    cd VoiceClick
+    ```
 
-- **Phase 1**: Setup & Architecture ✓ Complete (4/4)
-- **Phase 2**: UI Development ⏳ In Progress (Task 5: Main Window)
-- **Phase 3**: Testing & Packaging ⏹️ Pending
-- **Phase 4**: Documentation & Release ⏹️ Pending
+2.  **Create a Virtual Environment**:
+    It's highly recommended to use a virtual environment to manage dependencies.
+    ```bash
+    python -m venv venv
+    venv\Scripts\activate
+    ```
 
-**Overall**: 4/30 tasks complete (13%)
+3.  **Install Dependencies**:
+    The application requires several packages, including `PyQt6`, `faster-whisper`, and `sounddevice`. Install them using the `requirements.txt` file.
+    ```bash
+    pip install -r requirements.txt
+    ```
+    *Note: If you do not have a CUDA-enabled GPU, `faster-whisper` will automatically use the CPU. The installation may take some time as it downloads necessary libraries.*
 
-See `PROJECT_ROADMAP.md` for complete roadmap and `docs/` for detailed documentation.
+4.  **Run the Application**:
+    Once the dependencies are installed, you can run the application from the root directory.
+    ```bash
+    python app.py
+    ```
+    The first time you run the app, it will download the default Whisper model (`large-v3`), which may take a few minutes depending on your internet connection.
 
-## Project Structure
+## How It Works
 
-```
-VoiceClick/
-├── app.py                   # Main application entry point
-├── monitor.py              # Development progress widget
-├── requirements.txt        # Python dependencies
-├── PROJECT_ROADMAP.md      # 30-task development roadmap
-├── src/
-│   ├── core/              # Core modules (engine, detection, history)
-│   ├── ui/                # UI components (main window, tabs, widgets)
-│   ├── config/            # Configuration system
-│   └── resources/         # Icons and assets
-├── tests/                 # Unit tests
-├── docs/                  # Documentation
-├── examples/              # Example code
-└── .github/               # CI/CD workflows
-```
+VoiceClick runs in the background and can be activated to start recording your voice. When you stop recording (either manually or via silence detection), the captured audio is processed by the Whisper model, and the resulting text is automatically pasted into the currently active text field.
 
-## System Requirements
+The core components are:
+- **`app.py`**: The main entry point that launches the application.
+- **`src/core/engine.py`**: The transcription engine that handles audio recording and processing.
+- **`src/ui/main_window.py`**: The main application window built with PyQt6.
+- **`src/config/settings.py`**: Manages user settings and configurations.
 
-- Windows 11
-- Python 3.9+ (if running from source)
-- 4GB RAM minimum (8GB recommended)
-- NVIDIA GPU with CUDA support (optional, but recommended)
+## Contributing
 
-## Installation from Source
-
-1. Clone the repository
-2. Install dependencies: `pip install -r requirements.txt`
-3. Run: `python app.py`
-
-## Development Guide
-
-1. Read `PROJECT_ROADMAP.md` - understand the 30-task plan
-2. Review `docs/` - architecture and setup guides
-3. Check `src/core/` - core modules
-4. Start Phase 2 - UI development tasks
+Contributions are welcome! If you have ideas for new features, bug fixes, or improvements, feel free to open an issue or submit a pull request.
 
 ## License
 
-MIT License - See LICENSE file for details
-
-## Support
-
-For issues and questions, see documentation in the `docs/` folder.
+This project is licensed under the MIT License. See the `LICENSE` file for details.

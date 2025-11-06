@@ -1,6 +1,9 @@
 """
-VoiceClick History - Manages transcription history persistence
-Stores, retrieves, searches, and exports transcription records
+Manages the storage and retrieval of transcription history.
+
+This module provides a `TranscriptionHistory` class that handles the persistence
+of transcription records. It supports adding, retrieving, searching, and deleting
+records, as well as exporting them to various formats.
 """
 
 import json
@@ -9,295 +12,219 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional
 from dataclasses import dataclass, asdict, field
+import csv
+
+from src.config import constants
 
 logger = logging.getLogger(__name__)
 
-
 @dataclass
 class TranscriptionRecord:
-    """Single transcription history record."""
+    """
+    Represents a single transcription event.
+    
+    Attributes:
+        id: A unique identifier for the record, generated from the timestamp.
+        timestamp: The ISO 8601 formatted timestamp of when the transcription occurred.
+        text: The transcribed text.
+        duration_seconds: The duration of the audio that was transcribed.
+        model_used: The name of the Whisper model used for the transcription.
+        language: The language of the transcribed text.
+    """
+    id: str = field(default_factory=lambda: datetime.now().isoformat())
     timestamp: str
     text: str
     duration_seconds: float
     model_used: str
     language: str = "en"
-    confidence: float = 0.0
-    id: str = field(default_factory=lambda: datetime.now().isoformat())
 
 
 class TranscriptionHistory:
     """
-    Manages transcription history with persistence to JSON.
-    Provides search, filtering, and export functionality.
+    Manages a collection of transcription records, with persistence to a JSON file.
+    
+    This class provides an interface to interact with the transcription history,
+    ensuring that records are saved and loaded correctly and that the history
+    does not exceed a maximum size.
     """
 
-    def __init__(self, history_file: Optional[Path] = None, max_size: int = 50):
+    def __init__(self, history_file: Optional[Path] = None, max_size: int = constants.DEFAULT_HISTORY_SIZE):
         """
-        Initialize history manager.
-        
+        Initializes the TranscriptionHistory manager.
+
         Args:
-            history_file: Path to JSON history file (defaults to ~/.voice_click/history.json)
-            max_size: Maximum number of records to keep
+            history_file: Path to the JSON file for history persistence. Defaults to
+                          `~/.voice_click/history.json`.
+            max_size: The maximum number of records to store in the history.
         """
-        if history_file is None:
-            history_file = Path.home() / ".voice_click" / "history.json"
-        
-        self.history_file = history_file
+        self.history_file = history_file or Path.home() / ".voice_click" / constants.HISTORY_FILENAME
         self.max_size = max_size
         self.records: List[TranscriptionRecord] = []
         
-        # Create directory if needed
         self.history_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Load existing history
         self.load()
 
-    def add_record(self, text: str, duration_seconds: float, model_used: str) -> TranscriptionRecord:
+    def add_record(self, text: str, duration_seconds: float, model_used: str, language: str) -> TranscriptionRecord:
         """
-        Add a new transcription record to history.
-        
+        Creates a new transcription record and adds it to the history.
+
         Args:
-            text: Transcribed text
-            duration_seconds: Recording duration in seconds
-            model_used: Whisper model name used
-            
+            text: The transcribed text.
+            duration_seconds: The duration of the recorded audio.
+            model_used: The Whisper model used for transcription.
+            language: The detected or specified language.
+
         Returns:
-            TranscriptionRecord: The created record
+            The newly created TranscriptionRecord.
         """
         record = TranscriptionRecord(
             timestamp=datetime.now().isoformat(),
             text=text,
             duration_seconds=duration_seconds,
-            model_used=model_used
+            model_used=model_used,
+            language=language
         )
         
-        # Add to beginning of list (most recent first)
         self.records.insert(0, record)
-        
-        # Trim if exceeds max size
-        if len(self.records) > self.max_size:
-            self.records = self.records[:self.max_size]
-        
-        # Save to file
+        self._trim_history()
         self.save()
         
-        logger.info(f"Added transcription record: {record.id[:8]}... ({len(text)} chars)")
+        logger.info(f"Added transcription record {record.id} to history.")
         return record
 
     def get_all(self) -> List[TranscriptionRecord]:
-        """
-        Get all history records.
-        
-        Returns:
-            List of TranscriptionRecord objects (most recent first)
-        """
+        """Returns a copy of all records, sorted from most to least recent."""
         return self.records.copy()
 
     def get_by_id(self, record_id: str) -> Optional[TranscriptionRecord]:
         """
-        Get a specific record by ID.
-        
+        Retrieves a single record by its unique ID.
+
         Args:
-            record_id: Record ID
-            
+            record_id: The ID of the record to find.
+
         Returns:
-            TranscriptionRecord or None if not found
+            The matching TranscriptionRecord, or None if not found.
         """
-        for record in self.records:
-            if record.id == record_id:
-                return record
-        return None
+        return next((r for r in self.records if r.id == record_id), None)
 
     def search(self, query: str) -> List[TranscriptionRecord]:
         """
-        Search history by text content.
-        
+        Searches for records containing a specific text query (case-insensitive).
+
         Args:
-            query: Search query (case-insensitive)
-            
+            query: The text to search for within the transcription records.
+
         Returns:
-            List of matching records
+            A list of matching records.
         """
         query_lower = query.lower()
         return [r for r in self.records if query_lower in r.text.lower()]
 
-    def get_by_date_range(self, start_date: datetime, end_date: datetime) -> List[TranscriptionRecord]:
-        """
-        Get records within a date range.
-        
-        Args:
-            start_date: Start date
-            end_date: End date
-            
-        Returns:
-            List of records in date range
-        """
-        results = []
-        for record in self.records:
-            record_date = datetime.fromisoformat(record.timestamp)
-            if start_date <= record_date <= end_date:
-                results.append(record)
-        return results
-
     def delete_record(self, record_id: str) -> bool:
         """
-        Delete a record by ID.
-        
+        Deletes a record from the history by its ID.
+
         Args:
-            record_id: Record ID to delete
-            
+            record_id: The ID of the record to delete.
+
         Returns:
-            bool: True if deleted, False if not found
+            True if the record was found and deleted, False otherwise.
         """
-        for i, record in enumerate(self.records):
-            if record.id == record_id:
-                del self.records[i]
-                self.save()
-                logger.info(f"Deleted record: {record_id[:8]}...")
-                return True
+        initial_len = len(self.records)
+        self.records = [r for r in self.records if r.id != record_id]
+        if len(self.records) < initial_len:
+            self.save()
+            logger.info(f"Deleted record {record_id} from history.")
+            return True
+        logger.warning(f"Attempted to delete non-existent record {record_id}.")
         return False
 
     def clear_all(self):
-        """Clear all history records."""
+        """Removes all records from the history."""
         self.records = []
         self.save()
-        logger.info("History cleared")
+        logger.info("Transcription history has been cleared.")
 
     def export_to_csv(self, output_path: Path) -> bool:
         """
-        Export history to CSV file.
-        
-        Args:
-            output_path: Path to output CSV file
-            
-        Returns:
-            bool: True if successful
-        """
-        try:
-            import csv
-            
-            with open(output_path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(
-                    f,
-                    fieldnames=['timestamp', 'text', 'duration_seconds', 'model_used', 'language']
-                )
-                writer.writeheader()
-                
-                for record in self.records:
-                    writer.writerow({
-                        'timestamp': record.timestamp,
-                        'text': record.text,
-                        'duration_seconds': record.duration_seconds,
-                        'model_used': record.model_used,
-                        'language': record.language
-                    })
-            
-            logger.info(f"Exported {len(self.records)} records to {output_path}")
-            return True
-        
-        except Exception as e:
-            logger.error(f"CSV export failed: {e}")
-            return False
+        Exports the entire transcription history to a CSV file.
 
-    def export_to_txt(self, output_path: Path) -> bool:
-        """
-        Export history to plain text file.
-        
         Args:
-            output_path: Path to output text file
-            
+            output_path: The path to the destination CSV file.
+
         Returns:
-            bool: True if successful
+            True on successful export, False on failure.
         """
         try:
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write("VoiceClick Transcription History\n")
-                f.write("=" * 50 + "\n\n")
-                
-                for i, record in enumerate(self.records, 1):
-                    f.write(f"[{i}] {record.timestamp}\n")
-                    f.write(f"Duration: {record.duration_seconds:.1f}s | Model: {record.model_used}\n")
-                    f.write(f"Text: {record.text}\n")
-                    f.write("-" * 50 + "\n\n")
-            
-            logger.info(f"Exported {len(self.records)} records to {output_path}")
+            with open(output_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=list(asdict(self.records[0]).keys()) if self.records else [])
+                writer.writeheader()
+                for record in self.records:
+                    writer.writerow(asdict(record))
+            logger.info(f"Successfully exported {len(self.records)} records to {output_path}.")
             return True
-        
-        except Exception as e:
-            logger.error(f"Text export failed: {e}")
+        except (IOError, csv.Error) as e:
+            logger.error(f"Failed to export history to CSV: {e}", exc_info=True)
             return False
 
     def save(self) -> bool:
         """
-        Save history to JSON file.
+        Saves the current history to the JSON file.
         
         Returns:
-            bool: True if successful
+            True on success, False on failure.
         """
         try:
-            data = [asdict(record) for record in self.records]
-            
             with open(self.history_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            
+                json.dump([asdict(r) for r in self.records], f, indent=4)
             return True
-        
-        except Exception as e:
-            logger.error(f"Failed to save history: {e}")
+        except IOError as e:
+            logger.error(f"Failed to save history to {self.history_file}: {e}", exc_info=True)
             return False
 
     def load(self) -> bool:
         """
-        Load history from JSON file.
+        Loads the history from the JSON file.
         
         Returns:
-            bool: True if successful
+            True on success, False on failure.
         """
+        if not self.history_file.exists():
+            return True  # Nothing to load
+
         try:
-            if not self.history_file.exists():
-                self.records = []
-                return True
-            
             with open(self.history_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            
-            self.records = [TranscriptionRecord(**record) for record in data]
-            
-            # Keep only max_size records
-            if len(self.records) > self.max_size:
-                self.records = self.records[:self.max_size]
-                self.save()
-            
-            logger.info(f"Loaded {len(self.records)} history records")
+            self.records = [TranscriptionRecord(**r) for r in data]
+            self._trim_history()
+            logger.info(f"Loaded {len(self.records)} records from history.")
             return True
-        
-        except Exception as e:
-            logger.error(f"Failed to load history: {e}")
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.error(f"Failed to load or parse history file: {e}. Starting with empty history.", exc_info=True)
             self.records = []
             return False
 
-    def get_stats(self) -> Dict:
+    def _trim_history(self):
+        """Ensures the history does not exceed its maximum size."""
+        if len(self.records) > self.max_size:
+            self.records = self.records[:self.max_size]
+            logger.info(f"History trimmed to {self.max_size} records.")
+
+    def get_stats(self) -> Dict[str, float]:
         """
-        Get statistics about transcription history.
-        
-        Returns:
-            Dictionary with statistics
+        Calculates and returns statistics about the transcription history.
         """
         if not self.records:
             return {
                 "total_records": 0,
-                "total_characters": 0,
                 "total_duration": 0,
-                "average_duration": 0
+                "average_duration": 0,
             }
         
         total_duration = sum(r.duration_seconds for r in self.records)
-        total_chars = sum(len(r.text) for r in self.records)
-        
         return {
             "total_records": len(self.records),
-            "total_characters": total_chars,
             "total_duration": total_duration,
-            "average_duration": total_duration / len(self.records),
-            "average_chars_per_transcription": total_chars / len(self.records)
+            "average_duration": total_duration / len(self.records) if self.records else 0,
         }
