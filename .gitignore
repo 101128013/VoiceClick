@@ -1,8 +1,12 @@
-# Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
+# C extensions
 *.so
+
+# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -23,52 +27,135 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# Virtual Environment
+# PyInstaller
+*.manifest
+*.spec
+*.spec.bak
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
 venv/
 ENV/
-env/
+env.bak/
+venv.bak/
+.env.local
 
-# IDE
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# IDE Settings
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+
+# OS Specific
 .DS_Store
+Thumbs.db
+.AppleDouble
+.LSOverride
 
-# PyInstaller
-*.manifest
-*.spec
-
-# Environment
-.env
-.env.local
-
-# Application config
+# Voice Click Specific / Application config
 .voice_click/
 config.json
+.voice_click.log
+.voice_click_history.json
+*.tmp
+*.cache
 
 # Logs
-*.log
 logs/
 
 # Whisper models cache
 models/
 *.pt
 
-# Testing
-.pytest_cache/
-htmlcov/
-.coverage
-
 # Build outputs
 build/
 dist/
-*.spec.bak
 *.pyc
-__pycache__/
-*.py[cod]
-*$py.class
 
 # Installer outputs
 installer/Output/
@@ -79,6 +166,7 @@ installer/Output/
 VoiceClick-Portable-*.zip
 Voice-Click-Setup.exe
 
-# PyInstaller
-*.manifest
-*.spec.bak
+# Temporary files
+temp/
+tmp/
+*.bak
