@@ -1126,6 +1126,7 @@ def on_move(x, y):
     
     if not is_recording:
         return
+    log_debug(f"on_move: Current shake_threshold={shake_threshold}")
     
     current_time = time.time() * 1000 # Convert to milliseconds
     
@@ -1252,6 +1253,7 @@ def main():
         log_info("=" * 60)
         log_info("Loading...")
         log_info(f"Log file: {LOG_FILE}")
+        log_info(f"Loaded config: mouse_shake_threshold_px={config_manager.get('mouse_shake_threshold_px')}")
         
         # Load history
         load_history()
